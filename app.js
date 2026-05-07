@@ -171,9 +171,9 @@ function buildCountyLayer() {
           e.target.bringToFront();
         },
         mouseout: e => { countyLayer.resetStyle(e.target); },
-        click: () => {
+        click: (e) => {
           if (!countyInfoEnabled || !c) return;
-          showCountyInfo(c, fips);
+          showCountyInfo(c, fips, e.latlng);
         },
       });
     },
@@ -207,7 +207,7 @@ function buildCountyLayer() {
   });
 }
 
-function showCountyInfo(c, fips) {
+function showCountyInfo(c, fips, latlng) {
   const gap = stateGap[c.state] || {};
   const growth = c.growth_pct;
   const growthStr = growth == null ? 'N/A' :
@@ -216,15 +216,71 @@ function showCountyInfo(c, fips) {
     growth > 10 ? 'var(--success)' :
     growth < -10 ? 'var(--error)' : 'var(--text)';
 
+  // Irrigation share of cropland
+  const irrShare = (c.acres_2022 && c.cropland) ?
+    Math.round((c.acres_2022 / c.cropland) * 100) : null;
+
+  // Top crops as bars
+  let cropsHtml = '';
+  if (c.top_crops && c.top_crops.length) {
+    const max = c.top_crops[0].acres;
+    cropsHtml = '<div class="section-h">Top crops (acres harvested)</div>' +
+      c.top_crops.map(cr => {
+        const pct = max ? (cr.acres / max * 100) : 0;
+        return `<div class="crop-row">
+          <div class="crop-bar-wrap">
+            <div class="crop-bar" style="width:${pct}%"></div>
+            <span class="crop-name">${escapeHtml(cr.name)}</span>
+          </div>
+          <span class="crop-val">${fmt(cr.acres)}</span>
+        </div>`;
+      }).join('');
+  }
+
+  // Nearest dealers (top 3 by distance to county centroid)
+  let dealersHtml = '';
+  if (latlng) {
+    const nearby = dealers
+      .filter(d => visibleBrands.has(d.brand))
+      .map(d => ({ d, dist: haversineMiles(latlng.lat, latlng.lng, d.lat, d.lng) }))
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 3);
+    if (nearby.length) {
+      dealersHtml = '<div class="section-h">Nearest dealers</div>' +
+        nearby.map(({ d, dist }) =>
+          `<div class="row"><span class="k"><span class="dealer-dot ${d.brand}"></span>${escapeHtml(d.name)}</span><span class="v">${dist.toFixed(0)} mi</span></div>`
+        ).join('');
+    }
+  }
+
   const html = `
     <div class="gap-tag ${gap.cls || ''}">${gap.label || '—'} (state)</div>
-    <div class="row"><span class="k">2022 irrigated</span><span class="v">${fmt(c.acres_2022)} ac</span></div>
-    <div class="row"><span class="k">2007 irrigated</span><span class="v">${c.acres_2007 ? fmt(c.acres_2007) + ' ac' : 'N/A'}</span></div>
+
+    <div class="section-h">Irrigation (USDA Census of Agriculture)</div>
+    <div class="row"><span class="k">Irrigated 2022</span><span class="v">${fmt(c.acres_2022)} ac</span></div>
+    <div class="row"><span class="k">Irrigated 2007</span><span class="v">${c.acres_2007 ? fmt(c.acres_2007) + ' ac' : 'N/A'}</span></div>
     <div class="row"><span class="k">15-yr change</span><span class="v" style="color:${growthColor}">${growthStr}</span></div>
-    <div class="row"><span class="k">FIPS</span><span class="v">${fips}</span></div>
-    <div class="row"><span class="k">State acres</span><span class="v">${fmt(gap.acres)} ac</span></div>
+    ${irrShare != null ? `<div class="row"><span class="k">% of cropland irrigated</span><span class="v">${irrShare}%</span></div>` : ''}
+
+    <div class="section-h">Farms &amp; land</div>
+    ${c.farms != null ? `<div class="row"><span class="k">Farm operations</span><span class="v">${fmt(c.farms)}</span></div>` : ''}
+    ${c.avg_farm_size != null ? `<div class="row"><span class="k">Avg farm size</span><span class="v">${fmt(c.avg_farm_size)} ac</span></div>` : ''}
+    ${c.ag_land != null ? `<div class="row"><span class="k">Ag land</span><span class="v">${fmt(c.ag_land)} ac</span></div>` : ''}
+    ${c.cropland != null ? `<div class="row"><span class="k">Cropland</span><span class="v">${fmt(c.cropland)} ac</span></div>` : ''}
+    ${c.cropland_harvested != null ? `<div class="row"><span class="k">Cropland harvested</span><span class="v">${fmt(c.cropland_harvested)} ac</span></div>` : ''}
+    ${c.land_value_per_acre != null ? `<div class="row"><span class="k">Land value</span><span class="v">$${fmt(c.land_value_per_acre)}/ac</span></div>` : ''}
+    ${c.sales_dollars != null ? `<div class="row"><span class="k">Ag product sales</span><span class="v">$${fmtShort(c.sales_dollars)}</span></div>` : ''}
+
+    ${cropsHtml}
+
+    <div class="section-h">State context</div>
+    <div class="row"><span class="k">State irrigated</span><span class="v">${fmt(gap.acres)} ac</span></div>
     <div class="row"><span class="k">State dealers</span><span class="v">${gap.dealers || 0}</span></div>
-    <div class="row"><span class="k">Acres/dealer</span><span class="v">${gap.apd ? fmt(Math.round(gap.apd)) : '—'}</span></div>
+    <div class="row"><span class="k">Acres / dealer</span><span class="v">${gap.apd ? fmt(Math.round(gap.apd)) : '—'}</span></div>
+
+    ${dealersHtml}
+
+    <div class="src-line">FIPS ${fips} · USDA Census of Agriculture 2022</div>
   `;
   showInfoPanel(`${c.name} County, ${c.state}`, html);
 }
@@ -539,6 +595,22 @@ function updateCounts() {
 function fmt(n) {
   if (n == null) return '—';
   return Number(n).toLocaleString();
+}
+function fmtShort(n) {
+  if (n == null) return '—';
+  const x = Number(n);
+  if (x >= 1e9) return (x/1e9).toFixed(1) + 'B';
+  if (x >= 1e6) return (x/1e6).toFixed(1) + 'M';
+  if (x >= 1e3) return (x/1e3).toFixed(0) + 'K';
+  return x.toLocaleString();
+}
+function haversineMiles(lat1, lng1, lat2, lng2) {
+  const R = 3958.8;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
 }
 function escapeHtml(s) {
   if (s == null) return '';

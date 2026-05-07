@@ -337,6 +337,73 @@ button.secondary:hover {
   background: color-mix(in oklab, var(--success) 15%, transparent);
   color: var(--success);
 }
+#info-body .section-h {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 12px 0 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+}
+#info-body .section-h:first-child { margin-top: 0; }
+#info-body .crop-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+#info-body .crop-bar-wrap {
+  position: relative;
+  flex: 1;
+  height: 18px;
+  background: var(--surface);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#info-body .crop-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in oklab, var(--accent) 35%, transparent);
+  border-right: 1px solid var(--accent);
+}
+#info-body .crop-name {
+  position: relative;
+  padding: 0 6px;
+  font-size: 11.5px;
+  line-height: 18px;
+  font-weight: 500;
+}
+#info-body .crop-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 11.5px;
+  min-width: 56px;
+  text-align: right;
+}
+#info-body .dealer-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+#info-body .dealer-dot.Reinke { background: #A84B2F; }
+#info-body .dealer-dot.Valley { background: #20808D; }
+#info-body .dealer-dot.Zimmatic { background: #7A39BB; }
+#info-body .row .k { display: flex; align-items: center; }
+#info-body .src-line {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-style: normal;
+  letter-spacing: 0.02em;
+}
 
 /* Footer */
 #sidebar footer {

@@ -14,12 +14,23 @@ let counties = {};
 let countiesGeo = null;
 let dealerMarkers = {};         // brand -> L.featureGroup
 let countyLayer = null;
+let underservedLayer = null;     // overlay highlighting underserved counties
 let radiusMiles = 100;
 let activeRadius = null;
 let activeDealer = null;
+let allRadiiLayer = null;        // L.layerGroup of circles for every visible dealer
+let allRadiiVisible = false;
 const visibleBrands = new Set(['Reinke', 'Valley', 'Zimmatic']);
 let countyInfoEnabled = true;
 let countiesVisible = true;
+let underservedVisible = false;
+
+// Base tile layers (light, dark, aerial)
+let baseLayer = null;
+let labelsLayer = null;
+let aerialLayer = null;
+let aerialLabelsLayer = null;
+let aerialActive = false;
 
 // State acres-per-dealer cache (for gap classification)
 const stateGap = {};
@@ -42,16 +53,29 @@ const tileLabelsUrl = isDark
   ? 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png'
   : 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png';
 
-L.tileLayer(tileUrl, {
-  maxZoom: 18,
-  attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>',
-}).addTo(map);
-
 // Labels go on a separate pane that sits ABOVE the choropleth
 map.createPane('labels');
 map.getPane('labels').style.zIndex = 650;
 map.getPane('labels').style.pointerEvents = 'none';
-L.tileLayer(tileLabelsUrl, { maxZoom: 18, pane: 'labels', attribution: '' }).addTo(map);
+
+baseLayer = L.tileLayer(tileUrl, {
+  maxZoom: 18,
+  attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>',
+}).addTo(map);
+labelsLayer = L.tileLayer(tileLabelsUrl, { maxZoom: 18, pane: 'labels', attribution: '' }).addTo(map);
+
+// Esri World Imagery (aerial) — not added by default
+aerialLayer = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  {
+    maxZoom: 19,
+    attribution: 'Tiles © <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a>, Maxar, Earthstar Geographics, USGS',
+  }
+);
+aerialLabelsLayer = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+  { maxZoom: 19, pane: 'labels', attribution: '' }
+);
 
 // =============================================================
 // Color scale for irrigated acres
@@ -154,6 +178,33 @@ function buildCountyLayer() {
       });
     },
   }).addTo(map);
+
+  // Underserved overlay — hatched magenta over states classified as gaps + counties with significant acreage
+  // Uses a separate GeoJSON layer that's only added/removed via the toggle
+  underservedLayer = L.geoJSON(countiesGeo, {
+    style: feature => {
+      const fips = feature.id;
+      const c = counties[fips];
+      if (!c) return { fillOpacity: 0, weight: 0 };
+      const gap = stateGap[c.state];
+      // Highlight if the state is classified as a gap AND the county has measurable acres
+      const stateUnderserved = gap && (gap.label === 'Underserved' || gap.label === 'Below average' || gap.label === 'No dealers');
+      const hasAcres = (c.acres_2022 || 0) >= 5000;
+      if (stateUnderserved && hasAcres) {
+        // Stronger highlight for higher-acre counties in gap states
+        const intensity = Math.min(1, (c.acres_2022 || 0) / 100000);
+        return {
+          fillColor: '#A12C7B',
+          fillOpacity: 0.30 + 0.35 * intensity,
+          color: '#A12C7B',
+          weight: 1,
+          dashArray: '4, 4',
+        };
+      }
+      return { fillOpacity: 0, weight: 0, interactive: false };
+    },
+    interactive: false,
+  });
 }
 
 function showCountyInfo(c, fips) {
@@ -277,6 +328,33 @@ function clearRadius() {
   activeDealer = null;
 }
 
+// All-dealer coverage rings: one circle per visible dealer at current radiusMiles
+// Uses a Canvas renderer so 700+ circles stay performant
+const radiiRenderer = L.canvas({ padding: 0.3 });
+
+function buildAllRadii() {
+  if (allRadiiLayer) { map.removeLayer(allRadiiLayer); allRadiiLayer = null; }
+  if (!allRadiiVisible) return;
+  const meters = (radiusMiles > 0 ? radiusMiles : 100) * 1609.34;
+  const layers = [];
+  for (const d of dealers) {
+    if (!visibleBrands.has(d.brand)) continue;
+    layers.push(
+      L.circle([d.lat, d.lng], {
+        renderer: radiiRenderer,
+        radius: meters,
+        color: BRAND_COLORS[d.brand],
+        weight: 0.6,
+        fillColor: BRAND_COLORS[d.brand],
+        fillOpacity: 0.06,
+        opacity: 0.45,
+        interactive: false,
+      })
+    );
+  }
+  allRadiiLayer = L.layerGroup(layers).addTo(map);
+}
+
 // =============================================================
 // UI bindings
 // =============================================================
@@ -292,7 +370,27 @@ function bindUI() {
         visibleBrands.delete(brand);
         map.removeLayer(dealerMarkers[brand]);
       }
+      buildAllRadii(); // refresh all-radii to match brand visibility
     });
+  });
+
+  // Aerial / satellite imagery toggle
+  document.getElementById('toggle-aerial').addEventListener('change', e => {
+    aerialActive = e.target.checked;
+    if (aerialActive) {
+      map.removeLayer(baseLayer);
+      map.removeLayer(labelsLayer);
+      aerialLayer.addTo(map);
+      aerialLabelsLayer.addTo(map);
+    } else {
+      map.removeLayer(aerialLayer);
+      map.removeLayer(aerialLabelsLayer);
+      baseLayer.addTo(map);
+      labelsLayer.addTo(map);
+    }
+    // Keep choropleth + dealer markers above tiles by re-adding them
+    if (countiesVisible && countyLayer) countyLayer.bringToFront();
+    if (underservedVisible && underservedLayer) underservedLayer.bringToFront();
   });
 
   // County overlay toggle
@@ -307,6 +405,17 @@ function bindUI() {
     countyInfoEnabled = e.target.checked;
   });
 
+  // Underserved highlight toggle
+  document.getElementById('toggle-underserved').addEventListener('change', e => {
+    underservedVisible = e.target.checked;
+    if (underservedVisible) {
+      underservedLayer.addTo(map);
+      underservedLayer.bringToFront();
+    } else {
+      map.removeLayer(underservedLayer);
+    }
+  });
+
   // Radius buttons
   document.querySelectorAll('.radius-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -315,7 +424,14 @@ function bindUI() {
       radiusMiles = parseInt(btn.dataset.miles, 10);
       if (activeDealer) drawRadius(activeDealer);
       else if (radiusMiles === 0) clearRadius();
+      if (allRadiiVisible) buildAllRadii(); // refresh ring sizes
     });
+  });
+
+  // Show all dealer rings toggle
+  document.getElementById('toggle-all-radii').addEventListener('change', e => {
+    allRadiiVisible = e.target.checked;
+    buildAllRadii();
   });
 
   // Clear radius
@@ -413,6 +529,8 @@ function updateCounts() {
     const el = document.getElementById('count-' + b);
     if (el) el.textContent = counts[b].toLocaleString();
   }
+  const totalEl = document.getElementById('footer-count');
+  if (totalEl) totalEl.textContent = dealers.length.toLocaleString();
 }
 
 // =============================================================

@@ -38,7 +38,7 @@ const stateGap = {};
 // =============================================================
 // Map init
 // =============================================================
-const map = L.map('map', {
+const map = window._map = L.map('map', {
   zoomControl: true,
   attributionControl: true,
   preferCanvas: true,

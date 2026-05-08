@@ -20,6 +20,10 @@ let activeRadius = null;
 let activeDealer = null;
 let allRadiiLayer = null;        // L.layerGroup of circles for every visible dealer
 let allRadiiVisible = false;
+let pivotsData = null;           // [[lat, lng, radius_m], ...] - 80k entries
+let pivotsLayer = null;
+let pivotsVisible = false;
+const PIVOT_MIN_ZOOM = 7;        // don't render pivots below this zoom (too many, too small)
 const visibleBrands = new Set(['Reinke', 'Valley', 'Zimmatic']);
 let countyInfoEnabled = true;
 let countiesVisible = true;
@@ -419,6 +423,84 @@ function buildAllRadii() {
 }
 
 // =============================================================
+// Center pivot rendering
+// Source: GCPIS (Tian et al. 2023, CC0) - 80,319 detected US pivots
+// Strategy: only render pivots within current map bounds at zoom >= PIVOT_MIN_ZOOM
+// to keep performance smooth (rendering all 80k as DOM circles would be slow)
+// =============================================================
+const pivotsRenderer = L.canvas({ padding: 0.3 });
+pivotsRenderer.on('add', () => {
+  const c = pivotsRenderer._container;
+  if (c) c.style.pointerEvents = 'none';
+});
+
+function loadPivots() {
+  if (pivotsData) return Promise.resolve(pivotsData);
+  return fetch('./data/pivots.json').then(r => r.json()).then(d => {
+    pivotsData = d;
+    return d;
+  });
+}
+
+function renderPivots() {
+  // Always tear down before redrawing
+  if (pivotsLayer) { map.removeLayer(pivotsLayer); pivotsLayer = null; }
+  if (!pivotsVisible || !pivotsData) {
+    updatePivotsHint();
+    return;
+  }
+  const zoom = map.getZoom();
+  if (zoom < PIVOT_MIN_ZOOM) {
+    updatePivotsHint();
+    return;
+  }
+  const bounds = map.getBounds().pad(0.1);
+  const south = bounds.getSouth(), north = bounds.getNorth();
+  const west = bounds.getWest(), east = bounds.getEast();
+
+  const layers = [];
+  let count = 0;
+  for (let i = 0; i < pivotsData.length; i++) {
+    const [lat, lng, radius] = pivotsData[i];
+    if (lat < south || lat > north || lng < west || lng > east) continue;
+    layers.push(L.circle([lat, lng], {
+      renderer: pivotsRenderer,
+      radius: radius,
+      color: '#1A6B5B',
+      weight: 1,
+      fillColor: '#2A9D8F',
+      fillOpacity: 0.18,
+      opacity: 0.7,
+      interactive: false,
+    }));
+    count++;
+    // Cap at 5000 visible to keep rendering fast even at low zoom levels
+    if (count >= 5000) break;
+  }
+  pivotsLayer = L.layerGroup(layers).addTo(map);
+  updatePivotsHint(count);
+}
+
+function updatePivotsHint(visibleCount) {
+  const el = document.getElementById('pivots-hint');
+  if (!el) return;
+  if (!pivotsVisible) {
+    el.textContent = '80,319 pivots detected nationwide. Zoom in past state level (zoom 7+) to view.';
+    return;
+  }
+  const zoom = map.getZoom();
+  if (zoom < PIVOT_MIN_ZOOM) {
+    el.textContent = `Zoom in to see pivots (current: ${zoom}, need ${PIVOT_MIN_ZOOM}+).`;
+    return;
+  }
+  if (visibleCount >= 5000) {
+    el.textContent = `Showing 5,000 pivots in view (capped). Zoom in for less crowding.`;
+  } else {
+    el.textContent = `${visibleCount.toLocaleString()} pivots in current view.`;
+  }
+}
+
+// =============================================================
 // UI bindings
 // =============================================================
 function bindUI() {
@@ -495,6 +577,22 @@ function bindUI() {
   document.getElementById('toggle-all-radii').addEventListener('change', e => {
     allRadiiVisible = e.target.checked;
     buildAllRadii();
+  });
+
+  // Show actual pivots toggle
+  document.getElementById('toggle-pivots').addEventListener('change', async e => {
+    pivotsVisible = e.target.checked;
+    if (pivotsVisible) {
+      const hint = document.getElementById('pivots-hint');
+      if (hint) hint.textContent = 'Loading pivot data...';
+      await loadPivots();
+    }
+    renderPivots();
+  });
+
+  // Re-render pivots on pan/zoom (debounced via Leaflet's moveend)
+  map.on('moveend zoomend', () => {
+    if (pivotsVisible) renderPivots();
   });
 
   // Clear radius

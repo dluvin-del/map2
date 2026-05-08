@@ -386,7 +386,14 @@ function clearRadius() {
 
 // All-dealer coverage rings: one circle per visible dealer at current radiusMiles
 // Uses a Canvas renderer so 700+ circles stay performant
+// IMPORTANT: pane:'overlayPane' + pointer-events:none on the canvas DOM lets clicks
+// pass through to the county layer beneath. Without this, the canvas captures
+// hover/click and the county info panel becomes unreachable while rings are on.
 const radiiRenderer = L.canvas({ padding: 0.3 });
+radiiRenderer.on('add', () => {
+  const c = radiiRenderer._container;
+  if (c) c.style.pointerEvents = 'none';
+});
 
 function buildAllRadii() {
   if (allRadiiLayer) { map.removeLayer(allRadiiLayer); allRadiiLayer = null; }

@@ -6,7 +6,13 @@ const BRAND_COLORS = {
   Reinke:   '#A84B2F',
   Valley:   '#20808D',
   Zimmatic: '#7A39BB',
+  'T-L':    '#D97706',
 };
+
+// Map a brand name to a CSS-class-safe slug ("T-L" -> "TL")
+function brandClass(brand) {
+  return String(brand || '').replace(/[^A-Za-z0-9]/g, '');
+}
 
 // State
 let dealers = [];
@@ -24,7 +30,7 @@ let pivotsData = null;           // [[lat, lng, radius_m], ...] - 80k entries
 let pivotsLayer = null;
 let pivotsVisible = false;
 const PIVOT_MIN_ZOOM = 7;        // don't render pivots below this zoom (too many, too small)
-const visibleBrands = new Set(['Reinke', 'Valley', 'Zimmatic']);
+const visibleBrands = new Set(['Reinke', 'Valley', 'Zimmatic', 'T-L']);
 let countyInfoEnabled = true;
 let countiesVisible = true;
 let underservedVisible = false;
@@ -252,7 +258,7 @@ function showCountyInfo(c, fips, latlng) {
     if (nearby.length) {
       dealersHtml = '<div class="section-h">Nearest dealers</div>' +
         nearby.map(({ d, dist }) =>
-          `<div class="row"><span class="k"><span class="dealer-dot ${d.brand}"></span>${escapeHtml(d.name)}</span><span class="v">${dist.toFixed(0)} mi</span></div>`
+          `<div class="row"><span class="k"><span class="dealer-dot ${brandClass(d.brand)}"></span>${escapeHtml(d.name)}</span><span class="v">${dist.toFixed(0)} mi</span></div>`
         ).join('');
     }
   }
@@ -306,7 +312,7 @@ function buildDealerLayers() {
     const marker = L.marker([d.lat, d.lng], {
       icon: L.divIcon({
         className: '',
-        html: `<span class="dealer-marker ${d.brand}" title="${escapeHtml(d.name)}"></span>`,
+        html: `<span class="dealer-marker ${brandClass(d.brand)}" title="${escapeHtml(d.name)}"></span>`,
         iconSize: [14, 14],
         iconAnchor: [7, 7],
       }),
@@ -357,7 +363,7 @@ function dealerPopupHtml(d) {
   const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d.address || (d.lat+','+d.lng))}`;
   return `
     <div class="popup-title">${escapeHtml(d.name)}</div>
-    <span class="popup-brand ${d.brand}">${d.brand}</span>
+    <span class="popup-brand ${brandClass(d.brand)}">${d.brand}</span>
     ${addr}
     ${phone}
     <div class="popup-row" style="margin-top:6px">
@@ -684,10 +690,13 @@ function showInfoPanel(title, body) {
 }
 
 function updateCounts() {
-  const counts = { Reinke: 0, Valley: 0, Zimmatic: 0 };
-  for (const d of dealers) counts[d.brand]++;
+  const counts = { Reinke: 0, Valley: 0, Zimmatic: 0, 'T-L': 0 };
+  for (const d of dealers) {
+    if (counts[d.brand] !== undefined) counts[d.brand]++;
+  }
   for (const b in counts) {
-    const el = document.getElementById('count-' + b);
+    // Use brandClass for the element id ('T-L' -> 'TL')
+    const el = document.getElementById('count-' + brandClass(b));
     if (el) el.textContent = counts[b].toLocaleString();
   }
   const totalEl = document.getElementById('footer-count');

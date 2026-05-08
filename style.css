@@ -16,6 +16,7 @@
   --reinke: #A84B2F;
   --valley: #20808D;
   --zimmatic: #7A39BB;
+  --tl: #D97706;
 
   --sidebar-width: 340px;
   --shadow: 0 2px 12px rgba(40, 37, 29, 0.08);
@@ -394,6 +395,7 @@ button.secondary:hover {
 #info-body .dealer-dot.Reinke { background: #A84B2F; }
 #info-body .dealer-dot.Valley { background: #20808D; }
 #info-body .dealer-dot.Zimmatic { background: #7A39BB; }
+#info-body .dealer-dot[class*="T-L"], #info-body .dealer-dot.TL { background: #D97706; }
 #info-body .row .k { display: flex; align-items: center; }
 #info-body .src-line {
   margin-top: 12px;
@@ -468,6 +470,7 @@ button.secondary:hover {
 .popup-brand.Reinke { background: var(--reinke); }
 .popup-brand.Valley { background: var(--valley); }
 .popup-brand.Zimmatic { background: var(--zimmatic); }
+.popup-brand.TL { background: var(--tl); }
 .popup-row { font-size: 12px; margin: 3px 0; color: var(--text); }
 .popup-row .k { color: var(--text-muted); margin-right: 6px; }
 .popup-row a { color: var(--primary); text-decoration: none; }
@@ -483,6 +486,7 @@ button.secondary:hover {
 }
 .dealer-marker.Reinke { background: var(--reinke); }
 .dealer-marker.Valley { background: var(--valley); }
+.dealer-marker.TL { background: var(--tl); }
 .dealer-marker.Zimmatic { background: var(--zimmatic); }
 
 /* Cluster styling */

@@ -94,6 +94,19 @@
     <p class="hint" id="pivots-hint">80,319 pivots detected nationwide. Zoom in past state level (zoom 7+) to view.</p>
   </section>
 
+  <section class="panel" id="panel-sites">
+    <h2>American Irrigation Pivot Sites</h2>
+    <p class="hint">Pivot locations tagged by data source. Persisted across sessions.</p>
+    <div id="sources-list">
+      <p class="hint" id="sources-loading">Loading sources…</p>
+    </div>
+    <div class="sites-actions">
+      <button id="btn-add-source" class="secondary">+ Add source</button>
+      <button id="btn-import-sites" class="secondary">Import sites…</button>
+    </div>
+    <p class="hint" id="sites-status"></p>
+  </section>
+
   <section class="panel">
     <h2>Service radius</h2>
     <p class="hint">Click a dealer to ring just that one, or show all dealer rings at once.</p>
@@ -133,6 +146,44 @@
     <a href="https://www.nass.usda.gov/AgCensus/" target="_blank" rel="noopener">USDA 2022 Census of Agriculture</a></p>
   </footer>
 </aside>
+
+<!-- Modals for Pivot Sites -->
+<div id="modal-add-source" class="modal" hidden>
+  <div class="modal-card">
+    <h3>Add a new source</h3>
+    <p class="hint">Name any additional data source (e.g., Ranch Systems, FieldNET, dealer notes).</p>
+    <label class="field"><span>Source name</span>
+      <input type="text" id="src-name" maxlength="60" placeholder="e.g., FieldNET Sites">
+    </label>
+    <label class="field"><span>Marker color</span>
+      <input type="color" id="src-color" value="#7B3F00">
+    </label>
+    <div class="modal-actions">
+      <button class="secondary" data-close="modal-add-source">Cancel</button>
+      <button class="primary" id="src-save">Add source</button>
+    </div>
+    <p class="error" id="src-err" hidden></p>
+  </div>
+</div>
+
+<div id="modal-import" class="modal" hidden>
+  <div class="modal-card">
+    <h3>Import pivot sites</h3>
+    <p class="hint">CSV (with lat/lng columns), KML, or GeoJSON. Max 20MB per file.</p>
+    <label class="field"><span>Assign to source</span>
+      <select id="import-source"></select>
+    </label>
+    <label class="field"><span>File</span>
+      <input type="file" id="import-file" accept=".csv,.kml,.geojson,.json">
+    </label>
+    <p class="hint">CSV columns accepted: <code>lat, lng, name, radius_m, notes</code> (headers case-insensitive; also accepts <code>latitude/longitude/lon</code>).</p>
+    <div class="modal-actions">
+      <button class="secondary" data-close="modal-import">Cancel</button>
+      <button class="primary" id="import-run">Import</button>
+    </div>
+    <p class="error" id="import-err" hidden></p>
+  </div>
+</div>
 
 <!-- Main map -->
 <main id="map"></main>

@@ -119,6 +119,7 @@ Promise.all([
   buildDealerLayers();
   updateCounts();
   bindUI();
+  initSites();  // Load pivot-site sources + sites from backend
 }).catch(err => {
   console.error('Failed to load data:', err);
   document.getElementById('map').innerHTML =
@@ -731,4 +732,270 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
   })[c]);
+}
+
+
+// =============================================================
+// American Irrigation Pivot Sites (backend-persisted)
+// =============================================================
+
+const SITES_API = '__PORT_8000__'.startsWith('__')
+  ? 'http://localhost:8000'
+  : `${location.origin}${location.pathname.replace(/\/[^/]*$/, '')}/__PORT_8000__`;
+
+let sitesSources = [];              // [{name, color, count}]
+let sitesAll = [];                  // [{id, source, name, lat, lng, radius_m, notes}]
+let sitesLayers = {};               // source name -> L.layerGroup
+let visibleSources = new Set();     // source names currently checked
+
+async function initSites() {
+  try {
+    await refreshSources();
+    await loadSitesFromServer();
+    renderAllSites();
+    bindSitesUI();
+  } catch (e) {
+    console.error('Sites init failed', e);
+    const el = document.getElementById('sources-loading');
+    if (el) el.textContent = 'Sites backend unavailable.';
+  }
+}
+
+async function refreshSources() {
+  const r = await fetch(`${SITES_API}/api/sources`);
+  if (!r.ok) throw new Error(`sources ${r.status}`);
+  sitesSources = await r.json();
+  // Default: all sources visible
+  if (visibleSources.size === 0) {
+    for (const s of sitesSources) visibleSources.add(s.name);
+  }
+  renderSourcesList();
+  updateImportSourceSelect();
+}
+
+async function loadSitesFromServer() {
+  const r = await fetch(`${SITES_API}/api/sites`);
+  if (!r.ok) throw new Error(`sites ${r.status}`);
+  sitesAll = await r.json();
+}
+
+function renderSourcesList() {
+  const container = document.getElementById('sources-list');
+  if (!container) return;
+  if (!sitesSources.length) {
+    container.innerHTML = '<p class="hint">No sources yet. Click + Add source.</p>';
+    return;
+  }
+  container.innerHTML = sitesSources.map(s => {
+    const checked = visibleSources.has(s.name) ? 'checked' : '';
+    const safeName = escapeHtml(s.name);
+    return `
+      <label class="src-row" data-src="${safeName}">
+        <input type="checkbox" ${checked} data-source-toggle="${safeName}">
+        <span class="src-swatch" style="background:${s.color}"></span>
+        <span class="src-name">${safeName}</span>
+        <span class="src-count">${s.count.toLocaleString()}</span>
+        <button class="src-del" data-src-del="${safeName}" title="Delete source (must be empty)">×</button>
+      </label>`;
+  }).join('');
+
+  container.querySelectorAll('[data-source-toggle]').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const src = e.target.dataset.sourceToggle;
+      if (e.target.checked) visibleSources.add(src);
+      else visibleSources.delete(src);
+      renderSourceLayer(src);
+    });
+  });
+  container.querySelectorAll('[data-src-del]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const src = btn.dataset.srcDel;
+      if (!confirm(`Delete source "${src}"? (Only works if it has 0 sites.)`)) return;
+      const r = await fetch(`${SITES_API}/api/sources/${encodeURIComponent(src)}`, { method: 'DELETE' });
+      if (r.ok) {
+        visibleSources.delete(src);
+        await refreshSources();
+      } else {
+        const body = await r.json().catch(() => ({}));
+        showSitesStatus(body.detail || 'Delete failed', true);
+      }
+    });
+  });
+}
+
+function updateImportSourceSelect() {
+  const sel = document.getElementById('import-source');
+  if (!sel) return;
+  sel.innerHTML = sitesSources.map(s =>
+    `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`
+  ).join('');
+}
+
+function renderAllSites() {
+  // Tear down existing layers, rebuild by source
+  for (const s in sitesLayers) {
+    map.removeLayer(sitesLayers[s]);
+  }
+  sitesLayers = {};
+  for (const src of sitesSources) sitesLayers[src.name] = L.layerGroup();
+
+  for (const site of sitesAll) {
+    const layer = sitesLayers[site.source];
+    if (!layer) continue;
+    const color = sourceColor(site.source);
+    const marker = L.marker([site.lat, site.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<svg class="site-marker" viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg"><polygon points="7,1 13,13 1,13" fill="${color}" stroke="white" stroke-width="1.2" stroke-linejoin="round"/></svg>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 12],
+      }),
+    });
+    marker.bindPopup(sitePopupHtml(site));
+    layer.addLayer(marker);
+  }
+
+  for (const src of sitesSources) {
+    if (visibleSources.has(src.name)) map.addLayer(sitesLayers[src.name]);
+  }
+}
+
+function renderSourceLayer(sourceName) {
+  const layer = sitesLayers[sourceName];
+  if (!layer) return;
+  if (visibleSources.has(sourceName)) map.addLayer(layer);
+  else map.removeLayer(layer);
+}
+
+function sourceColor(name) {
+  const s = sitesSources.find(x => x.name === name);
+  return s ? s.color : '#666';
+}
+
+function sitePopupHtml(s) {
+  const color = sourceColor(s.source);
+  const title = s.name ? escapeHtml(s.name) : `Site #${s.id}`;
+  const notes = s.notes ? `<div class="popup-row">${escapeHtml(s.notes)}</div>` : '';
+  const radius = s.radius_m ? `<div class="popup-row"><span class="k">Radius</span>${Math.round(s.radius_m)} m</div>` : '';
+  return `
+    <div class="popup-title">${title}</div>
+    <span class="popup-brand" style="background:${color}">${escapeHtml(s.source)}</span>
+    <div class="popup-row"><span class="k">Lat/Lng</span>${s.lat.toFixed(5)}, ${s.lng.toFixed(5)}</div>
+    ${radius}
+    ${notes}
+    <div class="popup-row" style="margin-top:6px">
+      <a href="#" data-delete-site="${s.id}" style="color:#A12C7B">Delete this site</a>
+    </div>`;
+}
+
+function showSitesStatus(msg, isErr) {
+  const el = document.getElementById('sites-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.toggle('err', !!isErr);
+  el.classList.toggle('ok', !isErr);
+  clearTimeout(showSitesStatus._t);
+  showSitesStatus._t = setTimeout(() => { el.textContent = ''; el.className = ''; }, 5000);
+}
+
+function bindSitesUI() {
+  document.getElementById('btn-add-source').addEventListener('click', () => openModal('modal-add-source'));
+  document.getElementById('btn-import-sites').addEventListener('click', () => {
+    updateImportSourceSelect();
+    openModal('modal-import');
+  });
+  document.querySelectorAll('[data-close]').forEach(b => {
+    b.addEventListener('click', () => closeModal(b.dataset.close));
+  });
+  document.querySelectorAll('.modal').forEach(m => {
+    m.addEventListener('click', (e) => { if (e.target === m) m.setAttribute('hidden', ''); });
+  });
+
+  // Add source
+  document.getElementById('src-save').addEventListener('click', async () => {
+    const name = document.getElementById('src-name').value.trim();
+    const color = document.getElementById('src-color').value;
+    const err = document.getElementById('src-err');
+    err.hidden = true;
+    if (!name) { err.textContent = 'Name required'; err.hidden = false; return; }
+    const r = await fetch(`${SITES_API}/api/sources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, color }),
+    });
+    if (r.ok) {
+      closeModal('modal-add-source');
+      document.getElementById('src-name').value = '';
+      visibleSources.add(name);
+      await refreshSources();
+      renderAllSites();
+      showSitesStatus(`Added source "${name}"`);
+    } else {
+      const b = await r.json().catch(() => ({}));
+      err.textContent = b.detail || 'Add failed'; err.hidden = false;
+    }
+  });
+
+  // Import
+  document.getElementById('import-run').addEventListener('click', async () => {
+    const source = document.getElementById('import-source').value;
+    const fileInput = document.getElementById('import-file');
+    const err = document.getElementById('import-err');
+    err.hidden = true;
+    if (!fileInput.files.length) { err.textContent = 'Choose a file'; err.hidden = false; return; }
+    const fd = new FormData();
+    fd.append('source', source);
+    fd.append('file', fileInput.files[0]);
+    const btn = document.getElementById('import-run');
+    btn.disabled = true; btn.textContent = 'Importing…';
+    try {
+      const r = await fetch(`${SITES_API}/api/sites/import`, { method: 'POST', body: fd });
+      const body = await r.json();
+      if (r.ok) {
+        closeModal('modal-import');
+        fileInput.value = '';
+        await refreshSources();
+        await loadSitesFromServer();
+        renderAllSites();
+        showSitesStatus(`Imported ${body.imported} sites into ${body.source}${body.skipped ? ` (${body.skipped} skipped)` : ''}`);
+      } else {
+        err.textContent = body.detail || 'Import failed'; err.hidden = false;
+      }
+    } catch (e) {
+      err.textContent = String(e); err.hidden = false;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Import';
+    }
+  });
+
+  // Delete-site link handler (event delegation from popups)
+  map.on('popupopen', (e) => {
+    const el = e.popup.getElement();
+    if (!el) return;
+    const link = el.querySelector('[data-delete-site]');
+    if (!link) return;
+    link.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      const id = parseInt(link.dataset.deleteSite, 10);
+      if (!confirm('Delete this site?')) return;
+      const r = await fetch(`${SITES_API}/api/sites/${id}`, { method: 'DELETE' });
+      if (r.ok) {
+        map.closePopup();
+        sitesAll = sitesAll.filter(s => s.id !== id);
+        await refreshSources();
+        renderAllSites();
+        showSitesStatus('Site deleted');
+      }
+    });
+  });
+}
+
+function openModal(id) {
+  const m = document.getElementById(id);
+  if (m) m.removeAttribute('hidden');
+}
+function closeModal(id) {
+  const m = document.getElementById(id);
+  if (m) m.setAttribute('hidden', '');
 }

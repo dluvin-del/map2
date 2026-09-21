@@ -538,3 +538,146 @@ button.secondary:hover {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ============= Pivot Sites panel ============= */
+.sites-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.sites-actions button {
+  flex: 1;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+#sources-list .src-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 13px;
+}
+#sources-list .src-row input[type="checkbox"] { margin: 0; }
+#sources-list .src-row .src-swatch {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+#sources-list .src-row .src-name { flex: 1; }
+#sources-list .src-row .src-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+#sources-list .src-row .src-del {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+#sources-list .src-row .src-del:hover { color: #A12C7B; }
+
+#sites-status {
+  margin-top: 6px;
+  font-size: 12px;
+  min-height: 16px;
+}
+#sites-status.ok  { color: #01696F; }
+#sites-status.err { color: #A12C7B; }
+
+/* ============= Modals ============= */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 15, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 16px;
+}
+.modal[hidden] { display: none; }
+.modal-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px 22px;
+  max-width: 440px;
+  width: 100%;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.25);
+}
+.modal-card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.modal-card .field {
+  display: block;
+  margin: 12px 0;
+}
+.modal-card .field span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.modal-card .field input[type="text"],
+.modal-card .field select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: 6px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.modal-card .field input[type="color"] {
+  width: 56px; height: 32px;
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 2px;
+}
+.modal-card .field input[type="file"] { font-size: 13px; }
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.modal-actions button {
+  padding: 8px 16px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: none;
+  white-space: nowrap;
+}
+.modal-actions .primary {
+  background: var(--primary);
+  color: white;
+}
+.modal-actions .secondary {
+  background: rgba(0,0,0,0.06);
+  color: var(--text);
+}
+.modal-card .error {
+  color: #A12C7B;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.modal-card code {
+  background: rgba(0,0,0,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+/* ============= Site markers (triangles, distinct from dealer dots) ============= */
+.site-marker {
+  width: 14px;
+  height: 14px;
+  display: block;
+  transform: translate(-1px, -1px);
+}

@@ -786,6 +786,26 @@ async function sbGet(path) {
   return r.json();
 }
 
+// Supabase caps GET at 1000 rows. Page through Range headers until done.
+async function sbGetAll(path) {
+  const pageSize = 1000;
+  let start = 0;
+  const out = [];
+  while (true) {
+    const end = start + pageSize - 1;
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      headers: { ...SB_HEADERS, 'Range-Unit': 'items', 'Range': `${start}-${end}` },
+    });
+    if (!r.ok) throw new Error(`GET ${path} -> ${r.status}: ${await r.text()}`);
+    const chunk = await r.json();
+    out.push(...chunk);
+    if (chunk.length < pageSize) break;
+    start += pageSize;
+    if (start > 100000) break; // safety cap
+  }
+  return out;
+}
+
 async function sbPost(path, body, extraHeaders = {}) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method: 'POST',
@@ -807,15 +827,19 @@ async function sbDelete(path) {
 }
 
 async function refreshSources() {
-  // Get sources + a per-source count via head-request trick
   const rows = await sbGet('sources?select=name,color&order=name');
-  // Get per-source counts in one call using group_by via RPC not available on anon.
-  // Simpler: fetch all sites (they're already cached in sitesAll if loaded).
-  let counts = {};
-  try {
-    const siteRows = await sbGet('sites?select=source');
-    for (const s of siteRows) counts[s.source] = (counts[s.source] || 0) + 1;
-  } catch { /* ignore, counts stay 0 */ }
+  // Per-source counts via HEAD request with Prefer: count=exact (one call per source)
+  const counts = {};
+  await Promise.all(rows.map(async (row) => {
+    try {
+      const r = await fetch(
+        `${SUPABASE_URL}/rest/v1/sites?source=eq.${encodeURIComponent(row.name)}&select=id`,
+        { method: 'HEAD', headers: { ...SB_HEADERS, 'Prefer': 'count=exact', 'Range': '0-0' } }
+      );
+      const cr = r.headers.get('content-range'); // e.g. "0-0/3007"
+      if (cr) counts[row.name] = parseInt(cr.split('/')[1], 10) || 0;
+    } catch { /* count stays 0 */ }
+  }));
   sitesSources = rows.map(r => ({ ...r, count: counts[r.name] || 0 }));
   if (visibleSources.size === 0) {
     for (const s of sitesSources) visibleSources.add(s.name);
@@ -825,7 +849,7 @@ async function refreshSources() {
 }
 
 async function loadSitesFromServer() {
-  sitesAll = await sbGet('sites?select=id,source,name,lat,lng,radius_m,notes&order=id');
+  sitesAll = await sbGetAll('sites?select=id,source,name,lat,lng,radius_m,notes&order=id');
 }
 
 function renderSourcesList() {
@@ -890,7 +914,15 @@ function updateImportSourceSelect() {
 function renderAllSites() {
   for (const s in sitesLayers) map.removeLayer(sitesLayers[s]);
   sitesLayers = {};
-  for (const src of sitesSources) sitesLayers[src.name] = L.layerGroup();
+  for (const src of sitesSources) {
+    // Use marker-cluster for perf when there are lots of sites
+    sitesLayers[src.name] = L.markerClusterGroup({
+      chunkedLoading: true,
+      maxClusterRadius: 45,
+      spiderfyOnMaxZoom: true,
+      iconCreateFunction: (cluster) => siteClusterIcon(cluster, src.name),
+    });
+  }
 
   for (const site of sitesAll) {
     const layer = sitesLayers[site.source];
@@ -911,6 +943,17 @@ function renderAllSites() {
   for (const src of sitesSources) {
     if (visibleSources.has(src.name)) map.addLayer(sitesLayers[src.name]);
   }
+}
+
+function siteClusterIcon(cluster, sourceName) {
+  const n = cluster.getChildCount();
+  const color = sourceColor(sourceName);
+  const size = n < 10 ? 32 : n < 100 ? 38 : n < 1000 ? 44 : 52;
+  return L.divIcon({
+    className: '',
+    html: `<div style="background:${color};color:white;width:${size}px;height:${size}px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);opacity:0.9">${n.toLocaleString()}</div>`,
+    iconSize: [size, size],
+  });
 }
 
 function renderSourceLayer(sourceName) {

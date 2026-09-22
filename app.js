@@ -119,7 +119,6 @@ Promise.all([
   buildDealerLayers();
   updateCounts();
   bindUI();
-  initSites();  // Load pivot-site sources + sites from backend
 }).catch(err => {
   console.error('Failed to load data:', err);
   document.getElementById('map').innerHTML =
@@ -736,6 +735,14 @@ function escapeHtml(s) {
 
 
 
+
+// Kick off Sites layer independently of the dealer/county data load
+// so a slow JSON fetch can't block it.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => initSites());
+} else {
+  initSites();
+}
 
 // =============================================================
 // American Irrigation Pivot Sites (Supabase-backed)

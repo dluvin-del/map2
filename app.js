@@ -735,13 +735,25 @@ function escapeHtml(s) {
 }
 
 
+
+
 // =============================================================
-// American Irrigation Pivot Sites (backend-persisted)
+// American Irrigation Pivot Sites (Supabase-backed)
+// =============================================================
+//
+// Direct browser -> Supabase REST calls using the publishable key.
+// No FastAPI server required — works on GitHub Pages, Perplexity,
+// or any static host.
 // =============================================================
 
-const SITES_API = '__PORT_8000__'.startsWith('__')
-  ? 'http://localhost:8000'
-  : `${location.origin}${location.pathname.replace(/\/[^/]*$/, '')}/__PORT_8000__`;
+const SUPABASE_URL = 'https://yzxahuanqzkymbbrqxhn.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_cfFhFM8JtEY-pdU9dLxg3w_UtKeTuoX';
+
+const SB_HEADERS = {
+  'apikey': SUPABASE_KEY,
+  'Authorization': `Bearer ${SUPABASE_KEY}`,
+  'Content-Type': 'application/json',
+};
 
 let sitesSources = [];              // [{name, color, count}]
 let sitesAll = [];                  // [{id, source, name, lat, lng, radius_m, notes}]
@@ -757,15 +769,47 @@ async function initSites() {
   } catch (e) {
     console.error('Sites init failed', e);
     const el = document.getElementById('sources-loading');
-    if (el) el.textContent = 'Sites backend unavailable.';
+    if (el) el.textContent = 'Sites backend unavailable. ' + (e.message || '');
   }
 }
 
+async function sbGet(path) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: SB_HEADERS });
+  if (!r.ok) throw new Error(`GET ${path} -> ${r.status}: ${await r.text()}`);
+  return r.json();
+}
+
+async function sbPost(path, body, extraHeaders = {}) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'POST',
+    headers: { ...SB_HEADERS, 'Prefer': 'return=representation', ...extraHeaders },
+    body: JSON.stringify(body),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`POST ${path} -> ${r.status}: ${text}`);
+  return text ? JSON.parse(text) : null;
+}
+
+async function sbDelete(path) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'DELETE',
+    headers: SB_HEADERS,
+  });
+  if (!r.ok) throw new Error(`DELETE ${path} -> ${r.status}: ${await r.text()}`);
+  return true;
+}
+
 async function refreshSources() {
-  const r = await fetch(`${SITES_API}/api/sources`);
-  if (!r.ok) throw new Error(`sources ${r.status}`);
-  sitesSources = await r.json();
-  // Default: all sources visible
+  // Get sources + a per-source count via head-request trick
+  const rows = await sbGet('sources?select=name,color&order=name');
+  // Get per-source counts in one call using group_by via RPC not available on anon.
+  // Simpler: fetch all sites (they're already cached in sitesAll if loaded).
+  let counts = {};
+  try {
+    const siteRows = await sbGet('sites?select=source');
+    for (const s of siteRows) counts[s.source] = (counts[s.source] || 0) + 1;
+  } catch { /* ignore, counts stay 0 */ }
+  sitesSources = rows.map(r => ({ ...r, count: counts[r.name] || 0 }));
   if (visibleSources.size === 0) {
     for (const s of sitesSources) visibleSources.add(s.name);
   }
@@ -774,9 +818,7 @@ async function refreshSources() {
 }
 
 async function loadSitesFromServer() {
-  const r = await fetch(`${SITES_API}/api/sites`);
-  if (!r.ok) throw new Error(`sites ${r.status}`);
-  sitesAll = await r.json();
+  sitesAll = await sbGet('sites?select=id,source,name,lat,lng,radius_m,notes&order=id');
 }
 
 function renderSourcesList() {
@@ -811,14 +853,20 @@ function renderSourcesList() {
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       const src = btn.dataset.srcDel;
-      if (!confirm(`Delete source "${src}"? (Only works if it has 0 sites.)`)) return;
-      const r = await fetch(`${SITES_API}/api/sources/${encodeURIComponent(src)}`, { method: 'DELETE' });
-      if (r.ok) {
+      const srcObj = sitesSources.find(s => s.name === src);
+      if (srcObj && srcObj.count > 0) {
+        showSitesStatus(`"${src}" has ${srcObj.count} sites; delete them first`, true);
+        return;
+      }
+      if (!confirm(`Delete source "${src}"?`)) return;
+      try {
+        await sbDelete(`sources?name=eq.${encodeURIComponent(src)}`);
         visibleSources.delete(src);
         await refreshSources();
-      } else {
-        const body = await r.json().catch(() => ({}));
-        showSitesStatus(body.detail || 'Delete failed', true);
+        renderAllSites();
+        showSitesStatus(`Deleted source "${src}"`);
+      } catch (err) {
+        showSitesStatus('Delete failed: ' + err.message, true);
       }
     });
   });
@@ -833,10 +881,7 @@ function updateImportSourceSelect() {
 }
 
 function renderAllSites() {
-  // Tear down existing layers, rebuild by source
-  for (const s in sitesLayers) {
-    map.removeLayer(sitesLayers[s]);
-  }
+  for (const s in sitesLayers) map.removeLayer(sitesLayers[s]);
   sitesLayers = {};
   for (const src of sitesSources) sitesLayers[src.name] = L.layerGroup();
 
@@ -919,57 +964,71 @@ function bindSitesUI() {
     const err = document.getElementById('src-err');
     err.hidden = true;
     if (!name) { err.textContent = 'Name required'; err.hidden = false; return; }
-    const r = await fetch(`${SITES_API}/api/sources`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, color }),
-    });
-    if (r.ok) {
+    try {
+      await sbPost('sources', { name, color });
       closeModal('modal-add-source');
       document.getElementById('src-name').value = '';
       visibleSources.add(name);
       await refreshSources();
       renderAllSites();
       showSitesStatus(`Added source "${name}"`);
-    } else {
-      const b = await r.json().catch(() => ({}));
-      err.textContent = b.detail || 'Add failed'; err.hidden = false;
+    } catch (e) {
+      const msg = e.message.includes('23505') ? `Source "${name}" already exists` : e.message;
+      err.textContent = msg; err.hidden = false;
     }
   });
 
-  // Import
+  // Import — parse file client-side, bulk insert into Supabase
   document.getElementById('import-run').addEventListener('click', async () => {
     const source = document.getElementById('import-source').value;
     const fileInput = document.getElementById('import-file');
     const err = document.getElementById('import-err');
     err.hidden = true;
     if (!fileInput.files.length) { err.textContent = 'Choose a file'; err.hidden = false; return; }
-    const fd = new FormData();
-    fd.append('source', source);
-    fd.append('file', fileInput.files[0]);
     const btn = document.getElementById('import-run');
-    btn.disabled = true; btn.textContent = 'Importing…';
+    btn.disabled = true; btn.textContent = 'Parsing…';
     try {
-      const r = await fetch(`${SITES_API}/api/sites/import`, { method: 'POST', body: fd });
-      const body = await r.json();
-      if (r.ok) {
-        closeModal('modal-import');
-        fileInput.value = '';
-        await refreshSources();
-        await loadSitesFromServer();
-        renderAllSites();
-        showSitesStatus(`Imported ${body.imported} sites into ${body.source}${body.skipped ? ` (${body.skipped} skipped)` : ''}`);
+      const file = fileInput.files[0];
+      const text = await file.text();
+      let rows;
+      const fname = file.name.toLowerCase();
+      if (fname.endsWith('.kml') || fname.endsWith('.kmz')) {
+        rows = parseKML(text);
+      } else if (fname.endsWith('.geojson') || fname.endsWith('.json')) {
+        rows = parseGeoJSON(text);
       } else {
-        err.textContent = body.detail || 'Import failed'; err.hidden = false;
+        rows = parseCSV(text);
       }
+      if (!rows.length) throw new Error('No valid rows found in file');
+      const payload = rows.map(r => ({
+        source,
+        name: r.name || null,
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        radius_m: r.radius_m != null && r.radius_m !== '' ? Number(r.radius_m) : null,
+        notes: r.notes || null,
+      })).filter(r =>
+        Number.isFinite(r.lat) && Number.isFinite(r.lng) &&
+        r.lat >= -90 && r.lat <= 90 && r.lng >= -180 && r.lng <= 180
+      );
+      if (!payload.length) throw new Error('No rows had valid lat/lng');
+      btn.textContent = 'Uploading…';
+      // Bulk insert (Supabase accepts an array as body)
+      await sbPost('sites', payload);
+      closeModal('modal-import');
+      fileInput.value = '';
+      await refreshSources();
+      await loadSitesFromServer();
+      renderAllSites();
+      const skipped = rows.length - payload.length;
+      showSitesStatus(`Imported ${payload.length} sites${skipped ? ` (${skipped} skipped)` : ''}`);
     } catch (e) {
-      err.textContent = String(e); err.hidden = false;
+      err.textContent = e.message || String(e); err.hidden = false;
     } finally {
       btn.disabled = false; btn.textContent = 'Import';
     }
   });
 
-  // Delete-site link handler (event delegation from popups)
   map.on('popupopen', (e) => {
     const el = e.popup.getElement();
     if (!el) return;
@@ -979,16 +1038,119 @@ function bindSitesUI() {
       ev.preventDefault();
       const id = parseInt(link.dataset.deleteSite, 10);
       if (!confirm('Delete this site?')) return;
-      const r = await fetch(`${SITES_API}/api/sites/${id}`, { method: 'DELETE' });
-      if (r.ok) {
+      try {
+        await sbDelete(`sites?id=eq.${id}`);
         map.closePopup();
         sitesAll = sitesAll.filter(s => s.id !== id);
         await refreshSources();
         renderAllSites();
         showSitesStatus('Site deleted');
+      } catch (err) {
+        showSitesStatus('Delete failed: ' + err.message, true);
       }
     });
   });
+}
+
+// -------- Client-side file parsers --------
+
+function parseCSV(text) {
+  // Simple CSV that handles quoted values with commas
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+  if (!lines.length) return [];
+  const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+  const key = (candidates) => {
+    for (let i = 0; i < headers.length; i++) if (candidates.includes(headers[i])) return i;
+    return -1;
+  };
+  const latIdx  = key(['lat', 'latitude', 'y']);
+  const lngIdx  = key(['lng', 'lon', 'long', 'longitude', 'x']);
+  const nameIdx = key(['name', 'site', 'label', 'title', 'id']);
+  const radIdx  = key(['radius_m', 'radius', 'r']);
+  const notesIdx = key(['notes', 'note', 'description', 'desc']);
+  if (latIdx < 0 || lngIdx < 0) {
+    throw new Error('CSV must have lat/latitude and lng/longitude columns');
+  }
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    if (!cols.length) continue;
+    out.push({
+      lat: cols[latIdx],
+      lng: cols[lngIdx],
+      name: nameIdx >= 0 ? cols[nameIdx] : null,
+      radius_m: radIdx >= 0 ? cols[radIdx] : null,
+      notes: notesIdx >= 0 ? cols[notesIdx] : null,
+    });
+  }
+  return out;
+}
+
+function parseCSVLine(line) {
+  const out = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQ) {
+      if (c === '"' && line[i+1] === '"') { cur += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else cur += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseGeoJSON(text) {
+  const gj = JSON.parse(text);
+  const features = Array.isArray(gj) ? gj : (gj.features || []);
+  const out = [];
+  for (const f of features) {
+    const geom = f.geometry || {};
+    const props = f.properties || {};
+    if (geom.type === 'Point' && Array.isArray(geom.coordinates) && geom.coordinates.length >= 2) {
+      out.push({
+        lng: geom.coordinates[0],
+        lat: geom.coordinates[1],
+        name: props.name || props.title || null,
+        radius_m: props.radius_m || props.radius || null,
+        notes: props.description || props.notes || null,
+      });
+    }
+  }
+  return out;
+}
+
+function parseKML(text) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'application/xml');
+  const placemarks = doc.getElementsByTagName('Placemark');
+  const out = [];
+  for (const pm of placemarks) {
+    const nameEl = pm.getElementsByTagName('name')[0];
+    const descEl = pm.getElementsByTagName('description')[0];
+    const points = pm.getElementsByTagName('Point');
+    for (const pt of points) {
+      const coordEl = pt.getElementsByTagName('coordinates')[0];
+      if (!coordEl || !coordEl.textContent) continue;
+      const parts = coordEl.textContent.trim().split(',');
+      if (parts.length < 2) continue;
+      const lng = parseFloat(parts[0]);
+      const lat = parseFloat(parts[1]);
+      if (!isFinite(lat) || !isFinite(lng)) continue;
+      out.push({
+        lat, lng,
+        name: nameEl ? nameEl.textContent : null,
+        notes: descEl ? descEl.textContent : null,
+        radius_m: null,
+      });
+    }
+  }
+  return out;
 }
 
 function openModal(id) {

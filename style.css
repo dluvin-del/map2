@@ -681,3 +681,9 @@ button.secondary:hover {
   display: block;
   transform: translate(-1px, -1px);
 }
+
+/* Mute OSM tiles so the choropleth and data markers stay dominant.
+   Applied only to the base tile layer, not overlays. */
+#map.osm-base .leaflet-tile-pane .leaflet-layer:first-child img.leaflet-tile {
+  filter: grayscale(45%) brightness(1.08) contrast(0.92) saturate(0.75);
+}

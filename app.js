@@ -54,25 +54,22 @@ const map = window._map = L.map('map', {
   preferCanvas: true,
 }).setView([39.5, -98.5], 5);   // center of contiguous US
 
-// Use CartoDB Positron tiles — neutral, lets data sing
-const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-const tileUrl = isDark
-  ? 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png'
-  : 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png';
-const tileLabelsUrl = isDark
-  ? 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png'
-  : 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png';
+// OpenStreetMap tiles — no API key required, free forever with attribution.
+// A muted CSS filter is applied via #map-container.osm-base to keep the data on top.
+document.getElementById('map').classList.add('osm-base');
 
 // Labels go on a separate pane that sits ABOVE the choropleth
 map.createPane('labels');
 map.getPane('labels').style.zIndex = 650;
 map.getPane('labels').style.pointerEvents = 'none';
 
-baseLayer = L.tileLayer(tileUrl, {
-  maxZoom: 18,
-  attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>',
+baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  subdomains: 'abc',
+  attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
 }).addTo(map);
-labelsLayer = L.tileLayer(tileLabelsUrl, { maxZoom: 18, pane: 'labels', attribution: '' }).addTo(map);
+// No separate labels layer needed — OSM tiles already include labels.
+labelsLayer = L.layerGroup();
 
 // Esri World Imagery (aerial) — not added by default
 aerialLayer = L.tileLayer(
@@ -533,11 +530,13 @@ function bindUI() {
       map.removeLayer(labelsLayer);
       aerialLayer.addTo(map);
       aerialLabelsLayer.addTo(map);
+      document.getElementById('map').classList.remove('osm-base');
     } else {
       map.removeLayer(aerialLayer);
       map.removeLayer(aerialLabelsLayer);
       baseLayer.addTo(map);
       labelsLayer.addTo(map);
+      document.getElementById('map').classList.add('osm-base');
     }
     // Keep choropleth + dealer markers above tiles by re-adding them
     if (countiesVisible && countyLayer) countyLayer.bringToFront();

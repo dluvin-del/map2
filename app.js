@@ -845,6 +845,33 @@ async function sourceSiteCount(name) {
   return parseInt(cr.split('/')[1], 10) || 0;
 }
 
+async function moveSitesByCopy(fromName, toName) {
+  const fromCount = await sourceSiteCount(fromName);
+  if (fromCount === 0) return false;
+  const beforeTo = await sourceSiteCount(toName);
+  const rows = await sbGetAll(
+    `sites?source=eq.${encodeURIComponent(fromName)}&select=name,lat,lng,radius_m,notes&order=id`
+  );
+  const payload = rows.map((r) => ({
+    source: toName,
+    name: r.name,
+    lat: r.lat,
+    lng: r.lng,
+    radius_m: r.radius_m,
+    notes: r.notes,
+  }));
+  const batchSize = 200;
+  for (let i = 0; i < payload.length; i += batchSize) {
+    await sbPost('sites', payload.slice(i, i + batchSize), { Prefer: 'return=minimal' });
+  }
+  const afterTo = await sourceSiteCount(toName);
+  if (afterTo < beforeTo + rows.length) {
+    throw new Error(`Moved ${afterTo - beforeTo} of ${rows.length} sites to "${toName}"`);
+  }
+  await sbDelete(`sites?source=eq.${encodeURIComponent(fromName)}`);
+  return true;
+}
+
 async function renameSource(fromName, toName, color) {
   if (!sitesSources.some(s => s.name === fromName) || fromName === toName) return false;
   if (!sitesSources.some(s => s.name === toName)) {
@@ -885,6 +912,11 @@ async function ensureSheetSubcategories() {
       await sbPost('sources', { name: child.name, color: child.color });
       created = true;
     }
+  }
+  try {
+    if (await moveSitesByCopy(parent, 'Americus')) created = true;
+  } catch (err) {
+    console.warn('Could not move Google Sheets Sites into Americus', err);
   }
   return created;
 }

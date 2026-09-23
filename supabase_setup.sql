@@ -35,7 +35,8 @@ insert into public.sources (name, color) values
   ('AgSense Sites',      '#F5A623'),
   ('Fitzgerald',         '#34A853'),
   ('Live Oak',           '#FBBC04'),
-  ('Brownsville',        '#EA4335')
+  ('Brownsville',        '#EA4335'),
+  ('Americus',           '#8B5A2B')
 on conflict (name) do nothing;
 
 -- Row Level Security ------------------------------------------
@@ -47,18 +48,29 @@ alter table public.sites   enable row level security;
 
 drop policy if exists "public read sources"   on public.sources;
 drop policy if exists "public write sources"  on public.sources;
+drop policy if exists "public update sources" on public.sources;
 drop policy if exists "public delete sources" on public.sources;
 drop policy if exists "public read sites"     on public.sites;
 drop policy if exists "public write sites"    on public.sites;
+drop policy if exists "public update sites"   on public.sites;
 drop policy if exists "public delete sites"   on public.sites;
 
 create policy "public read sources"   on public.sources for select using (true);
 create policy "public write sources"  on public.sources for insert with check (true);
+create policy "public update sources" on public.sources for update using (true) with check (true);
 create policy "public delete sources" on public.sources for delete using (true);
 
 create policy "public read sites"     on public.sites   for select using (true);
 create policy "public write sites"    on public.sites   for insert with check (true);
+create policy "public update sites"   on public.sites   for update using (true) with check (true);
 create policy "public delete sites"   on public.sites   for delete using (true);
+
+insert into public.sources (name, color) values ('Americus', '#8B5A2B')
+on conflict (name) do nothing;
+update public.sites set source = 'Americus' where source = 'Google Sheets Americus';
+delete from public.sources s
+where s.name = 'Google Sheets Americus'
+  and not exists (select 1 from public.sites t where t.source = s.name);
 
 -- Sanity check ------------------------------------------------
 select name, color from public.sources order by name;

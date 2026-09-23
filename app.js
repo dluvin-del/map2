@@ -770,6 +770,7 @@ const SHEETS_CHILDREN = [
   { name: 'Fitzgerald', color: '#34A853' },
   { name: 'Live Oak', color: '#FBBC04' },
   { name: 'Brownsville', color: '#EA4335' },
+  { name: 'Americus', color: '#8B5A2B', aliases: ['Google Sheets Americus'] },
 ];
 
 function sheetsParentName() {
@@ -780,14 +781,33 @@ function sheetsChildNames() {
   return SHEETS_CHILDREN.map(c => c.name);
 }
 
-function sourceRowHtml(s, nested) {
+function sheetsNestedNames() {
+  return new Set([
+    ...sheetsChildNames(),
+    ...SHEETS_CHILDREN.flatMap(c => c.aliases || []),
+  ]);
+}
+
+function resolveChildSource(child) {
+  const byName = sitesSources.find(s => s.name === child.name);
+  if (byName) return { ...byName, label: child.name };
+  for (const alias of child.aliases || []) {
+    const found = sitesSources.find(s => s.name === alias);
+    if (found) return { ...found, label: child.name };
+  }
+  return null;
+}
+
+function sourceRowHtml(s, nested, label) {
+  const shown = label || s.name;
   const checked = visibleSources.has(s.name) ? 'checked' : '';
   const safeName = escapeHtml(s.name);
+  const safeLabel = escapeHtml(shown);
   return `
       <label class="src-row${nested ? ' nested' : ''}" data-src="${safeName}">
         <input type="checkbox" ${checked} data-source-toggle="${safeName}">
         <span class="src-swatch" style="background:${s.color}"></span>
-        <span class="src-name">${safeName}</span>
+        <span class="src-name">${safeLabel}</span>
         <span class="src-count">${s.count.toLocaleString()}</span>
         <button class="src-del" data-src-del="${safeName}" title="Delete source (must be empty)">×</button>
       </label>`;
@@ -797,9 +817,13 @@ async function initSites() {
   try {
     await refreshSources();
     if (await ensureSheetSubcategories()) {
-      visibleSources.add('Google Sheets Sites');
-      for (const child of SHEETS_CHILDREN) visibleSources.add(child.name);
       await refreshSources();
+    }
+    visibleSources.add(sheetsParentName());
+    for (const child of SHEETS_CHILDREN) {
+      const resolved = resolveChildSource(child);
+      if (resolved) visibleSources.add(resolved.name);
+      visibleSources.add(child.name);
     }
     await loadSitesFromServer();
     renderAllSites();
@@ -811,6 +835,35 @@ async function initSites() {
   }
 }
 
+async function sourceSiteCount(name) {
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/sites?source=eq.${encodeURIComponent(name)}&select=id`,
+    { method: 'HEAD', headers: { ...SB_HEADERS, 'Prefer': 'count=exact', 'Range': '0-0' } }
+  );
+  const cr = r.headers.get('content-range');
+  if (!cr) return 0;
+  return parseInt(cr.split('/')[1], 10) || 0;
+}
+
+async function renameSource(fromName, toName, color) {
+  if (!sitesSources.some(s => s.name === fromName) || fromName === toName) return false;
+  if (!sitesSources.some(s => s.name === toName)) {
+    await sbPost('sources', { name: toName, color });
+  }
+  const remainingBefore = await sourceSiteCount(fromName);
+  if (remainingBefore > 0) {
+    await sbPatch(`sites?source=eq.${encodeURIComponent(fromName)}`, { source: toName });
+  }
+  const remainingAfter = await sourceSiteCount(fromName);
+  if (remainingAfter > 0) {
+    throw new Error(`Could not move ${remainingAfter} sites from "${fromName}"`);
+  }
+  await sbDelete(`sources?name=eq.${encodeURIComponent(fromName)}`);
+  visibleSources.delete(fromName);
+  visibleSources.add(toName);
+  return true;
+}
+
 async function ensureSheetSubcategories() {
   let created = false;
   const parent = sheetsParentName();
@@ -819,8 +872,17 @@ async function ensureSheetSubcategories() {
     created = true;
   }
   for (const child of SHEETS_CHILDREN) {
-    if (!sitesSources.some(s => s.name === child.name)) {
-      await sbPost('sources', child);
+    for (const alias of child.aliases || []) {
+      try {
+        if (await renameSource(alias, child.name, child.color)) created = true;
+      } catch (err) {
+        console.warn(`Could not rename "${alias}" to "${child.name}"`, err);
+      }
+    }
+    const hasName = sitesSources.some(s => s.name === child.name);
+    const hasAlias = (child.aliases || []).some(a => sitesSources.some(s => s.name === a));
+    if (!hasName && !hasAlias) {
+      await sbPost('sources', { name: child.name, color: child.color });
       created = true;
     }
   }
@@ -851,6 +913,17 @@ async function sbGetAll(path) {
     if (start > 100000) break; // safety cap
   }
   return out;
+}
+
+async function sbPatch(path, body) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: 'PATCH',
+    headers: { ...SB_HEADERS, 'Prefer': 'return=representation' },
+    body: JSON.stringify(body),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`PATCH ${path} -> ${r.status}: ${text}`);
+  return text ? JSON.parse(text) : null;
 }
 
 async function sbPost(path, body, extraHeaders = {}) {
@@ -907,10 +980,10 @@ function renderSourcesList() {
     return;
   }
   const parent = sheetsParentName();
-  const childNames = new Set(sheetsChildNames());
+  const nestedNames = sheetsNestedNames();
   const parentSrc = sitesSources.find(s => s.name === parent);
-  const children = SHEETS_CHILDREN.map(c => sitesSources.find(s => s.name === c.name)).filter(Boolean);
-  const rest = sitesSources.filter(s => s.name !== parent && !childNames.has(s.name));
+  const children = SHEETS_CHILDREN.map(c => resolveChildSource(c)).filter(Boolean);
+  const rest = sitesSources.filter(s => s.name !== parent && !nestedNames.has(s.name));
 
   let html = rest.map(s => sourceRowHtml(s, false)).join('');
   if (parentSrc || children.length) {
@@ -927,7 +1000,7 @@ function renderSourcesList() {
         <button class="src-del" data-src-del="${escapeHtml(parentSrc.name)}" title="Delete source (must be empty)">×</button>
       </label>`;
     }
-    html += `<div class="src-group-kids">${children.map(s => sourceRowHtml(s, true)).join('')}</div></div>`;
+    html += `<div class="src-group-kids">${children.map(s => sourceRowHtml(s, true, s.label)).join('')}</div></div>`;
   }
   container.innerHTML = html;
 
@@ -936,10 +1009,12 @@ function renderSourcesList() {
       const src = e.target.dataset.sourceToggle;
       const on = e.target.checked;
       if (e.target.dataset.sourceParent) {
-        for (const child of sheetsChildNames()) {
-          if (on) visibleSources.add(child);
-          else visibleSources.delete(child);
-          renderSourceLayer(child);
+        for (const child of SHEETS_CHILDREN) {
+          const resolved = resolveChildSource(child);
+          const name = resolved ? resolved.name : child.name;
+          if (on) visibleSources.add(name);
+          else visibleSources.delete(name);
+          renderSourceLayer(name);
         }
       }
       if (on) visibleSources.add(src);
@@ -975,15 +1050,15 @@ function updateImportSourceSelect() {
   const sel = document.getElementById('import-source');
   if (!sel) return;
   const parent = sheetsParentName();
-  const childNames = new Set(sheetsChildNames());
-  const rest = sitesSources.filter(s => s.name !== parent && !childNames.has(s.name));
+  const nestedNames = sheetsNestedNames();
+  const rest = sitesSources.filter(s => s.name !== parent && !nestedNames.has(s.name));
   const parentSrc = sitesSources.find(s => s.name === parent);
-  const children = SHEETS_CHILDREN.map(c => sitesSources.find(s => s.name === c.name)).filter(Boolean);
+  const children = SHEETS_CHILDREN.map(c => resolveChildSource(c)).filter(Boolean);
   let html = rest.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
   if (parentSrc || children.length) {
     html += `<optgroup label="${escapeHtml(parent)}">`;
     if (parentSrc) html += `<option value="${escapeHtml(parentSrc.name)}">${escapeHtml(parentSrc.name)}</option>`;
-    html += children.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
+    html += children.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.label || s.name)}</option>`).join('');
     html += `</optgroup>`;
   }
   sel.innerHTML = html;

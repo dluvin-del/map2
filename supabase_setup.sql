@@ -36,7 +36,21 @@ insert into public.sources (name, color) values
   ('Fitzgerald',         '#34A853'),
   ('Live Oak',           '#FBBC04'),
   ('Brownsville',        '#EA4335'),
-  ('Americus',           '#8B5A2B')
+  ('Americus',           '#8B5A2B'),
+  ('Moultrie',           '#9C27B0'),
+  ('Unadilla',           '#00ACC1'),
+  ('AgSense Americus',   '#8B5A2B'),
+  ('AgSense Brownsville','#EA4335'),
+  ('AgSense Moultrie',   '#9C27B0'),
+  ('AgSense Fitzgerald', '#34A853'),
+  ('AgSense Live Oak',   '#FBBC04'),
+  ('AgSense Unadilla',   '#00ACC1'),
+  ('Google Earth Americus',   '#8B5A2B'),
+  ('Google Earth Brownsville','#EA4335'),
+  ('Google Earth Moultrie',   '#9C27B0'),
+  ('Google Earth Fitzgerald', '#34A853'),
+  ('Google Earth Live Oak',   '#FBBC04'),
+  ('Google Earth Unadilla',   '#00ACC1')
 on conflict (name) do nothing;
 
 -- Row Level Security ------------------------------------------

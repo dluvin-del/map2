@@ -766,34 +766,66 @@ let sitesAll = [];                  // [{id, source, name, lat, lng, radius_m, n
 let sitesLayers = {};               // source name -> L.layerGroup
 let visibleSources = new Set();     // source names currently checked
 
-const SHEETS_CHILDREN = [
-  { name: 'Fitzgerald', color: '#34A853' },
-  { name: 'Live Oak', color: '#FBBC04' },
-  { name: 'Brownsville', color: '#EA4335' },
-  { name: 'Americus', color: '#8B5A2B', aliases: ['Google Sheets Americus'] },
+const SHOP_LOCATIONS = [
+  { label: 'Americus', color: '#8B5A2B' },
+  { label: 'Brownsville', color: '#EA4335' },
+  { label: 'Moultrie', color: '#9C27B0' },
+  { label: 'Fitzgerald', color: '#34A853' },
+  { label: 'Live Oak', color: '#FBBC04' },
+  { label: 'Unadilla', color: '#00ACC1' },
 ];
 
-function sheetsParentName() {
-  return 'Google Sheets Sites';
+const SOURCE_GROUPS = [
+  {
+    parent: 'Google Sheets Sites',
+    parentColor: '#4285F4',
+    prefix: null,
+    drainParentTo: 'Americus',
+  },
+  {
+    parent: 'AgSense Sites',
+    parentColor: '#F5A623',
+    prefix: 'AgSense',
+  },
+  {
+    parent: 'Google Earth Sites',
+    parentColor: '#4285F4',
+    prefix: 'Google Earth',
+  },
+];
+
+function childSourceName(group, loc) {
+  return group.prefix ? `${group.prefix} ${loc.label}` : loc.label;
 }
 
-function sheetsChildNames() {
-  return SHEETS_CHILDREN.map(c => c.name);
+function groupChildren(group) {
+  return SHOP_LOCATIONS.map((loc) => ({
+    name: childSourceName(group, loc),
+    label: loc.label,
+    color: loc.color,
+    aliases: !group.prefix && loc.label === 'Americus' ? ['Google Sheets Americus'] : [],
+  }));
 }
 
-function sheetsNestedNames() {
-  return new Set([
-    ...sheetsChildNames(),
-    ...SHEETS_CHILDREN.flatMap(c => c.aliases || []),
-  ]);
+function allGroupChildren() {
+  return SOURCE_GROUPS.flatMap(groupChildren);
+}
+
+function nestedSourceNames() {
+  const names = new Set(SOURCE_GROUPS.map((g) => g.parent));
+  for (const child of allGroupChildren()) {
+    names.add(child.name);
+    for (const alias of child.aliases || []) names.add(alias);
+  }
+  return names;
 }
 
 function resolveChildSource(child) {
   const byName = sitesSources.find(s => s.name === child.name);
-  if (byName) return { ...byName, label: child.name };
+  if (byName) return { ...byName, label: child.label || child.name };
   for (const alias of child.aliases || []) {
     const found = sitesSources.find(s => s.name === alias);
-    if (found) return { ...found, label: child.name };
+    if (found) return { ...found, label: child.label || child.name };
   }
   return null;
 }
@@ -816,14 +848,16 @@ function sourceRowHtml(s, nested, label) {
 async function initSites() {
   try {
     await refreshSources();
-    if (await ensureSheetSubcategories()) {
+    if (await ensureLocationSubcategories()) {
       await refreshSources();
     }
-    visibleSources.add(sheetsParentName());
-    for (const child of SHEETS_CHILDREN) {
-      const resolved = resolveChildSource(child);
-      if (resolved) visibleSources.add(resolved.name);
-      visibleSources.add(child.name);
+    for (const group of SOURCE_GROUPS) {
+      visibleSources.add(group.parent);
+      for (const child of groupChildren(group)) {
+        const resolved = resolveChildSource(child);
+        if (resolved) visibleSources.add(resolved.name);
+        visibleSources.add(child.name);
+      }
     }
     await loadSitesFromServer();
     renderAllSites();
@@ -891,32 +925,35 @@ async function renameSource(fromName, toName, color) {
   return true;
 }
 
-async function ensureSheetSubcategories() {
+async function ensureLocationSubcategories() {
   let created = false;
-  const parent = sheetsParentName();
-  if (!sitesSources.some(s => s.name === parent)) {
-    await sbPost('sources', { name: parent, color: '#4285F4' });
-    created = true;
-  }
-  for (const child of SHEETS_CHILDREN) {
-    for (const alias of child.aliases || []) {
-      try {
-        if (await renameSource(alias, child.name, child.color)) created = true;
-      } catch (err) {
-        console.warn(`Could not rename "${alias}" to "${child.name}"`, err);
-      }
-    }
-    const hasName = sitesSources.some(s => s.name === child.name);
-    const hasAlias = (child.aliases || []).some(a => sitesSources.some(s => s.name === a));
-    if (!hasName && !hasAlias) {
-      await sbPost('sources', { name: child.name, color: child.color });
+  for (const group of SOURCE_GROUPS) {
+    if (!sitesSources.some(s => s.name === group.parent)) {
+      await sbPost('sources', { name: group.parent, color: group.parentColor });
       created = true;
     }
-  }
-  try {
-    if (await moveSitesByCopy(parent, 'Americus')) created = true;
-  } catch (err) {
-    console.warn('Could not move Google Sheets Sites into Americus', err);
+    for (const child of groupChildren(group)) {
+      for (const alias of child.aliases || []) {
+        try {
+          if (await renameSource(alias, child.name, child.color)) created = true;
+        } catch (err) {
+          console.warn(`Could not rename "${alias}" to "${child.name}"`, err);
+        }
+      }
+      const hasName = sitesSources.some(s => s.name === child.name);
+      const hasAlias = (child.aliases || []).some(a => sitesSources.some(s => s.name === a));
+      if (!hasName && !hasAlias) {
+        await sbPost('sources', { name: child.name, color: child.color });
+        created = true;
+      }
+    }
+    if (group.drainParentTo) {
+      try {
+        if (await moveSitesByCopy(group.parent, group.drainParentTo)) created = true;
+      } catch (err) {
+        console.warn(`Could not move ${group.parent} into ${group.drainParentTo}`, err);
+      }
+    }
   }
   return created;
 }
@@ -1011,21 +1048,21 @@ function renderSourcesList() {
     container.innerHTML = '<p class="hint">No sources yet. Click + Add source.</p>';
     return;
   }
-  const parent = sheetsParentName();
-  const nestedNames = sheetsNestedNames();
-  const parentSrc = sitesSources.find(s => s.name === parent);
-  const children = SHEETS_CHILDREN.map(c => resolveChildSource(c)).filter(Boolean);
-  const rest = sitesSources.filter(s => s.name !== parent && !nestedNames.has(s.name));
+  const nestedNames = nestedSourceNames();
+  const rest = sitesSources.filter(s => !nestedNames.has(s.name));
 
   let html = rest.map(s => sourceRowHtml(s, false)).join('');
-  if (parentSrc || children.length) {
+  for (const group of SOURCE_GROUPS) {
+    const parentSrc = sitesSources.find(s => s.name === group.parent);
+    const children = groupChildren(group).map(c => resolveChildSource(c)).filter(Boolean);
+    if (!parentSrc && !children.length) continue;
     const parentCount = (parentSrc ? parentSrc.count : 0) + children.reduce((n, s) => n + s.count, 0);
     const parentChecked = parentSrc && visibleSources.has(parentSrc.name) && children.every(s => visibleSources.has(s.name));
     html += `<div class="src-group">`;
     if (parentSrc) {
       html += `
       <label class="src-row" data-src="${escapeHtml(parentSrc.name)}">
-        <input type="checkbox" ${parentChecked ? 'checked' : ''} data-source-toggle="${escapeHtml(parentSrc.name)}" data-source-parent="1">
+        <input type="checkbox" ${parentChecked ? 'checked' : ''} data-source-toggle="${escapeHtml(parentSrc.name)}" data-source-parent="${escapeHtml(group.parent)}">
         <span class="src-swatch" style="background:${parentSrc.color}"></span>
         <span class="src-name">${escapeHtml(parentSrc.name)}</span>
         <span class="src-count">${parentCount.toLocaleString()}</span>
@@ -1041,12 +1078,15 @@ function renderSourcesList() {
       const src = e.target.dataset.sourceToggle;
       const on = e.target.checked;
       if (e.target.dataset.sourceParent) {
-        for (const child of SHEETS_CHILDREN) {
-          const resolved = resolveChildSource(child);
-          const name = resolved ? resolved.name : child.name;
-          if (on) visibleSources.add(name);
-          else visibleSources.delete(name);
-          renderSourceLayer(name);
+        const group = SOURCE_GROUPS.find(g => g.parent === e.target.dataset.sourceParent);
+        if (group) {
+          for (const child of groupChildren(group)) {
+            const resolved = resolveChildSource(child);
+            const name = resolved ? resolved.name : child.name;
+            if (on) visibleSources.add(name);
+            else visibleSources.delete(name);
+            renderSourceLayer(name);
+          }
         }
       }
       if (on) visibleSources.add(src);
@@ -1081,14 +1121,14 @@ function renderSourcesList() {
 function updateImportSourceSelect() {
   const sel = document.getElementById('import-source');
   if (!sel) return;
-  const parent = sheetsParentName();
-  const nestedNames = sheetsNestedNames();
-  const rest = sitesSources.filter(s => s.name !== parent && !nestedNames.has(s.name));
-  const parentSrc = sitesSources.find(s => s.name === parent);
-  const children = SHEETS_CHILDREN.map(c => resolveChildSource(c)).filter(Boolean);
+  const nestedNames = nestedSourceNames();
+  const rest = sitesSources.filter(s => !nestedNames.has(s.name));
   let html = rest.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
-  if (parentSrc || children.length) {
-    html += `<optgroup label="${escapeHtml(parent)}">`;
+  for (const group of SOURCE_GROUPS) {
+    const parentSrc = sitesSources.find(s => s.name === group.parent);
+    const children = groupChildren(group).map(c => resolveChildSource(c)).filter(Boolean);
+    if (!parentSrc && !children.length) continue;
+    html += `<optgroup label="${escapeHtml(group.parent)}">`;
     if (parentSrc) html += `<option value="${escapeHtml(parentSrc.name)}">${escapeHtml(parentSrc.name)}</option>`;
     html += children.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.label || s.name)}</option>`).join('');
     html += `</optgroup>`;

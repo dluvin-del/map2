@@ -31,7 +31,11 @@ create index if not exists idx_sites_source on public.sites(source);
 insert into public.sources (name, color) values
   ('Verizon Sites',      '#EE0000'),
   ('Google Earth Sites', '#4285F4'),
-  ('AgSense Sites',      '#F5A623')
+  ('Google Sheets Sites','#4285F4'),
+  ('AgSense Sites',      '#F5A623'),
+  ('Fitzgerald',         '#34A853'),
+  ('Live Oak',           '#FBBC04'),
+  ('Brownsville',        '#EA4335')
 on conflict (name) do nothing;
 
 -- Row Level Security ------------------------------------------

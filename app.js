@@ -766,9 +766,41 @@ let sitesAll = [];                  // [{id, source, name, lat, lng, radius_m, n
 let sitesLayers = {};               // source name -> L.layerGroup
 let visibleSources = new Set();     // source names currently checked
 
+const SHEETS_CHILDREN = [
+  { name: 'Fitzgerald', color: '#34A853' },
+  { name: 'Live Oak', color: '#FBBC04' },
+  { name: 'Brownsville', color: '#EA4335' },
+];
+
+function sheetsParentName() {
+  return 'Google Sheets Sites';
+}
+
+function sheetsChildNames() {
+  return SHEETS_CHILDREN.map(c => c.name);
+}
+
+function sourceRowHtml(s, nested) {
+  const checked = visibleSources.has(s.name) ? 'checked' : '';
+  const safeName = escapeHtml(s.name);
+  return `
+      <label class="src-row${nested ? ' nested' : ''}" data-src="${safeName}">
+        <input type="checkbox" ${checked} data-source-toggle="${safeName}">
+        <span class="src-swatch" style="background:${s.color}"></span>
+        <span class="src-name">${safeName}</span>
+        <span class="src-count">${s.count.toLocaleString()}</span>
+        <button class="src-del" data-src-del="${safeName}" title="Delete source (must be empty)">×</button>
+      </label>`;
+}
+
 async function initSites() {
   try {
     await refreshSources();
+    if (await ensureSheetSubcategories()) {
+      visibleSources.add('Google Sheets Sites');
+      for (const child of SHEETS_CHILDREN) visibleSources.add(child.name);
+      await refreshSources();
+    }
     await loadSitesFromServer();
     renderAllSites();
     bindSitesUI();
@@ -777,6 +809,22 @@ async function initSites() {
     const el = document.getElementById('sources-loading');
     if (el) el.textContent = 'Sites backend unavailable. ' + (e.message || '');
   }
+}
+
+async function ensureSheetSubcategories() {
+  let created = false;
+  const parent = sheetsParentName();
+  if (!sitesSources.some(s => s.name === parent)) {
+    await sbPost('sources', { name: parent, color: '#4285F4' });
+    created = true;
+  }
+  for (const child of SHEETS_CHILDREN) {
+    if (!sitesSources.some(s => s.name === child.name)) {
+      await sbPost('sources', child);
+      created = true;
+    }
+  }
+  return created;
 }
 
 async function sbGet(path) {
@@ -858,25 +906,46 @@ function renderSourcesList() {
     container.innerHTML = '<p class="hint">No sources yet. Click + Add source.</p>';
     return;
   }
-  container.innerHTML = sitesSources.map(s => {
-    const checked = visibleSources.has(s.name) ? 'checked' : '';
-    const safeName = escapeHtml(s.name);
-    return `
-      <label class="src-row" data-src="${safeName}">
-        <input type="checkbox" ${checked} data-source-toggle="${safeName}">
-        <span class="src-swatch" style="background:${s.color}"></span>
-        <span class="src-name">${safeName}</span>
-        <span class="src-count">${s.count.toLocaleString()}</span>
-        <button class="src-del" data-src-del="${safeName}" title="Delete source (must be empty)">×</button>
+  const parent = sheetsParentName();
+  const childNames = new Set(sheetsChildNames());
+  const parentSrc = sitesSources.find(s => s.name === parent);
+  const children = SHEETS_CHILDREN.map(c => sitesSources.find(s => s.name === c.name)).filter(Boolean);
+  const rest = sitesSources.filter(s => s.name !== parent && !childNames.has(s.name));
+
+  let html = rest.map(s => sourceRowHtml(s, false)).join('');
+  if (parentSrc || children.length) {
+    const parentCount = (parentSrc ? parentSrc.count : 0) + children.reduce((n, s) => n + s.count, 0);
+    const parentChecked = parentSrc && visibleSources.has(parentSrc.name) && children.every(s => visibleSources.has(s.name));
+    html += `<div class="src-group">`;
+    if (parentSrc) {
+      html += `
+      <label class="src-row" data-src="${escapeHtml(parentSrc.name)}">
+        <input type="checkbox" ${parentChecked ? 'checked' : ''} data-source-toggle="${escapeHtml(parentSrc.name)}" data-source-parent="1">
+        <span class="src-swatch" style="background:${parentSrc.color}"></span>
+        <span class="src-name">${escapeHtml(parentSrc.name)}</span>
+        <span class="src-count">${parentCount.toLocaleString()}</span>
+        <button class="src-del" data-src-del="${escapeHtml(parentSrc.name)}" title="Delete source (must be empty)">×</button>
       </label>`;
-  }).join('');
+    }
+    html += `<div class="src-group-kids">${children.map(s => sourceRowHtml(s, true)).join('')}</div></div>`;
+  }
+  container.innerHTML = html;
 
   container.querySelectorAll('[data-source-toggle]').forEach(cb => {
     cb.addEventListener('change', (e) => {
       const src = e.target.dataset.sourceToggle;
-      if (e.target.checked) visibleSources.add(src);
+      const on = e.target.checked;
+      if (e.target.dataset.sourceParent) {
+        for (const child of sheetsChildNames()) {
+          if (on) visibleSources.add(child);
+          else visibleSources.delete(child);
+          renderSourceLayer(child);
+        }
+      }
+      if (on) visibleSources.add(src);
       else visibleSources.delete(src);
       renderSourceLayer(src);
+      renderSourcesList();
     });
   });
   container.querySelectorAll('[data-src-del]').forEach(btn => {
@@ -905,9 +974,19 @@ function renderSourcesList() {
 function updateImportSourceSelect() {
   const sel = document.getElementById('import-source');
   if (!sel) return;
-  sel.innerHTML = sitesSources.map(s =>
-    `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`
-  ).join('');
+  const parent = sheetsParentName();
+  const childNames = new Set(sheetsChildNames());
+  const rest = sitesSources.filter(s => s.name !== parent && !childNames.has(s.name));
+  const parentSrc = sitesSources.find(s => s.name === parent);
+  const children = SHEETS_CHILDREN.map(c => sitesSources.find(s => s.name === c.name)).filter(Boolean);
+  let html = rest.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
+  if (parentSrc || children.length) {
+    html += `<optgroup label="${escapeHtml(parent)}">`;
+    if (parentSrc) html += `<option value="${escapeHtml(parentSrc.name)}">${escapeHtml(parentSrc.name)}</option>`;
+    html += children.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
+    html += `</optgroup>`;
+  }
+  sel.innerHTML = html;
 }
 
 function renderAllSites() {

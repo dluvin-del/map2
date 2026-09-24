@@ -404,7 +404,7 @@ radiiRenderer.on('add', () => {
 
 function buildAllRadii() {
   if (allRadiiLayer) { map.removeLayer(allRadiiLayer); allRadiiLayer = null; }
-  if (!allRadiiVisible) return;
+  if (!allRadiiVisible || siteSearchQuery) return;
   const meters = (radiusMiles > 0 ? radiusMiles : 100) * 1609.34;
   const layers = [];
   for (const d of dealers) {
@@ -448,7 +448,7 @@ function loadPivots() {
 function renderPivots() {
   // Always tear down before redrawing
   if (pivotsLayer) { map.removeLayer(pivotsLayer); pivotsLayer = null; }
-  if (!pivotsVisible || !pivotsData) {
+  if (siteSearchQuery || !pivotsVisible || !pivotsData) {
     updatePivotsHint();
     return;
   }
@@ -513,7 +513,7 @@ function bindUI() {
       const brand = cb.dataset.brand;
       if (cb.checked) {
         visibleBrands.add(brand);
-        map.addLayer(dealerMarkers[brand]);
+        if (!siteSearchQuery) map.addLayer(dealerMarkers[brand]);
       } else {
         visibleBrands.delete(brand);
         map.removeLayer(dealerMarkers[brand]);
@@ -546,7 +546,7 @@ function bindUI() {
   // County overlay toggle
   document.getElementById('toggle-counties').addEventListener('change', e => {
     countiesVisible = e.target.checked;
-    if (countiesVisible) map.addLayer(countyLayer);
+    if (countiesVisible && !siteSearchQuery) map.addLayer(countyLayer);
     else map.removeLayer(countyLayer);
   });
 
@@ -558,7 +558,7 @@ function bindUI() {
   // Underserved highlight toggle
   document.getElementById('toggle-underserved').addEventListener('change', e => {
     underservedVisible = e.target.checked;
-    if (underservedVisible) {
+    if (underservedVisible && !siteSearchQuery) {
       underservedLayer.addTo(map);
       underservedLayer.bringToFront();
     } else {
@@ -610,70 +610,12 @@ function bindUI() {
 
   // Search
   const searchInput = document.getElementById('search');
-  const resultsBox = document.getElementById('search-results');
-  searchInput.addEventListener('input', () => {
-    const q = searchInput.value.trim().toLowerCase();
-    if (!q || q.length < 2) { resultsBox.innerHTML = ''; return; }
-    const matches = [];
-    // Match dealers
-    for (const d of dealers) {
-      if (matches.length >= 12) break;
-      const hay = `${d.name} ${d.city} ${d.state}`.toLowerCase();
-      if (hay.includes(q)) matches.push({ type: 'dealer', d });
+  searchInput.addEventListener('input', () => runMapSearch());
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      runMapSearch();
     }
-    // Match counties
-    for (const fips in counties) {
-      if (matches.length >= 18) break;
-      const c = counties[fips];
-      const hay = `${c.name} ${c.state}`.toLowerCase();
-      if (hay.includes(q)) matches.push({ type: 'county', c, fips });
-    }
-    resultsBox.innerHTML = matches.map(m => {
-      if (m.type === 'dealer') {
-        return `<div class="search-result" data-type="dealer" data-id="${m.d.id}">
-          <span>${escapeHtml(m.d.name)}</span>
-          <span class="meta">${m.d.city}, ${m.d.state}</span>
-        </div>`;
-      } else {
-        return `<div class="search-result" data-type="county" data-fips="${m.fips}">
-          <span>${escapeHtml(m.c.name)} County</span>
-          <span class="meta">${m.c.state} · ${fmt(m.c.acres_2022)} ac</span>
-        </div>`;
-      }
-    }).join('');
-    resultsBox.querySelectorAll('.search-result').forEach(el => {
-      el.addEventListener('click', () => {
-        if (el.dataset.type === 'dealer') {
-          const d = dealers.find(x => x.id === parseInt(el.dataset.id, 10));
-          if (d) {
-            map.setView([d.lat, d.lng], 11);
-            // Open popup after a short delay so cluster has time to spiderfy
-            setTimeout(() => {
-              dealerMarkers[d.brand].zoomToShowLayer(
-                dealerMarkers[d.brand].getLayers().find(m => m.dealerData && m.dealerData.id === d.id),
-                () => {
-                  const target = dealerMarkers[d.brand].getLayers().find(m => m.dealerData && m.dealerData.id === d.id);
-                  if (target) target.openPopup();
-                }
-              );
-            }, 100);
-          }
-        } else {
-          const c = counties[el.dataset.fips];
-          if (c) {
-            // Find feature in geojson and zoom
-            const f = countiesGeo.features.find(ft => ft.id === el.dataset.fips);
-            if (f) {
-              const layer = L.geoJSON(f);
-              map.fitBounds(layer.getBounds(), { maxZoom: 9, padding: [50, 50] });
-              showCountyInfo(c, el.dataset.fips);
-            }
-          }
-        }
-        resultsBox.innerHTML = '';
-        searchInput.value = '';
-      });
-    });
   });
 
   // Mobile sidebar toggle
@@ -765,6 +707,7 @@ let sitesSources = [];              // [{name, color, count}]
 let sitesAll = [];                  // [{id, source, name, lat, lng, radius_m, notes}]
 let sitesLayers = {};               // source name -> L.layerGroup
 let visibleSources = new Set();     // source names currently checked
+let siteSearchQuery = '';
 
 const SHOP_LOCATIONS = [
   { label: 'Americus', color: '#8B5A2B' },
@@ -862,6 +805,7 @@ async function initSites() {
     await loadSitesFromServer();
     renderAllSites();
     bindSitesUI();
+    if (siteSearchQuery) runMapSearch();
   } catch (e) {
     console.error('Sites init failed', e);
     const el = document.getElementById('sources-loading');
@@ -1085,13 +1029,18 @@ function renderSourcesList() {
             const name = resolved ? resolved.name : child.name;
             if (on) visibleSources.add(name);
             else visibleSources.delete(name);
-            renderSourceLayer(name);
+            if (!siteSearchQuery) renderSourceLayer(name);
           }
         }
       }
       if (on) visibleSources.add(src);
       else visibleSources.delete(src);
-      renderSourceLayer(src);
+      if (siteSearchQuery) {
+        renderAllSites();
+        runMapSearch({ skipRender: true });
+      } else {
+        renderSourceLayer(src);
+      }
       renderSourcesList();
     });
   });
@@ -1136,6 +1085,108 @@ function updateImportSourceSelect() {
   sel.innerHTML = html;
 }
 
+function siteSearchHay(site) {
+  return `${site.name || ''} ${site.notes || ''} ${site.source || ''}`.toLowerCase();
+}
+
+function matchingVisibleSites() {
+  return sitesAll.filter((site) => {
+    if (!visibleSources.has(site.source)) return false;
+    if (!siteSearchQuery) return true;
+    return siteSearchHay(site).includes(siteSearchQuery);
+  });
+}
+
+function setOtherOverlaysVisible(on) {
+  for (const brand of Object.keys(dealerMarkers)) {
+    if (on && visibleBrands.has(brand) && dealerMarkers[brand]) map.addLayer(dealerMarkers[brand]);
+    else if (dealerMarkers[brand]) map.removeLayer(dealerMarkers[brand]);
+  }
+  if (allRadiiLayer) {
+    if (on && allRadiiVisible) map.addLayer(allRadiiLayer);
+    else map.removeLayer(allRadiiLayer);
+  }
+  if (pivotsLayer) {
+    if (on && pivotsVisible) map.addLayer(pivotsLayer);
+    else map.removeLayer(pivotsLayer);
+  }
+  if (countyLayer) {
+    if (on && countiesVisible) map.addLayer(countyLayer);
+    else map.removeLayer(countyLayer);
+  }
+  if (underservedLayer) {
+    if (on && underservedVisible) map.addLayer(underservedLayer);
+    else map.removeLayer(underservedLayer);
+  }
+}
+
+function fitToSites(sites) {
+  if (!sites.length) return;
+  if (sites.length === 1) {
+    map.setView([sites[0].lat, sites[0].lng], 14);
+    return;
+  }
+  const bounds = L.latLngBounds(sites.map((s) => [s.lat, s.lng]));
+  map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
+}
+
+function openSiteMarker(siteId, sourceName) {
+  const layer = sitesLayers[sourceName];
+  if (!layer) return;
+  const marker = layer.getLayers().find((m) => m.siteId === siteId);
+  if (!marker) return;
+  if (typeof layer.zoomToShowLayer === 'function') {
+    layer.zoomToShowLayer(marker, () => marker.openPopup());
+  } else {
+    map.setView(marker.getLatLng(), 15);
+    marker.openPopup();
+  }
+}
+
+function runMapSearch(opts = {}) {
+  const searchInput = document.getElementById('search');
+  const resultsBox = document.getElementById('search-results');
+  if (!searchInput || !resultsBox) return;
+  const q = searchInput.value.trim().toLowerCase();
+  const filtering = q.length >= 2;
+  siteSearchQuery = filtering ? q : '';
+  const siteMatches = filtering ? matchingVisibleSites() : [];
+  if (!opts.skipRender) renderAllSites();
+  setOtherOverlaysVisible(!filtering);
+
+  if (!filtering) {
+    resultsBox.innerHTML = '';
+    return;
+  }
+
+  if (siteMatches.length && siteMatches.length <= 400) fitToSites(siteMatches);
+
+  const shown = siteMatches.slice(0, 40);
+  const extra = siteMatches.length - shown.length;
+  resultsBox.innerHTML =
+    (shown.length
+      ? shown
+          .map(
+            (s) => `<div class="search-result" data-type="site" data-id="${s.id}" data-source="${escapeHtml(s.source)}">
+          <span>${escapeHtml(s.name || `Site #${s.id}`)}</span>
+          <span class="meta">${escapeHtml(s.source)}</span>
+        </div>`,
+          )
+          .join('')
+      : `<p class="hint">No matching sites in the checked sources.</p>`) +
+    (extra > 0 ? `<p class="hint">${extra.toLocaleString()} more matches on the map.</p>` : '');
+
+  resultsBox.querySelectorAll('.search-result[data-type="site"]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset.id);
+      const site = sitesAll.find((s) => s.id === id);
+      if (!site) return;
+      map.setView([site.lat, site.lng], 15);
+      setTimeout(() => openSiteMarker(site.id, site.source), 200);
+    });
+  });
+}
+
 function renderAllSites() {
   for (const s in sitesLayers) map.removeLayer(sitesLayers[s]);
   sitesLayers = {};
@@ -1149,7 +1200,7 @@ function renderAllSites() {
     });
   }
 
-  for (const site of sitesAll) {
+  for (const site of matchingVisibleSites()) {
     const layer = sitesLayers[site.source];
     if (!layer) continue;
     const color = sourceColor(site.source);
@@ -1161,12 +1212,15 @@ function renderAllSites() {
         iconAnchor: [7, 12],
       }),
     });
+    marker.siteId = site.id;
     marker.bindPopup(sitePopupHtml(site));
     layer.addLayer(marker);
   }
 
   for (const src of sitesSources) {
-    if (visibleSources.has(src.name)) map.addLayer(sitesLayers[src.name]);
+    if (visibleSources.has(src.name) && sitesLayers[src.name].getLayers().length) {
+      map.addLayer(sitesLayers[src.name]);
+    }
   }
 }
 

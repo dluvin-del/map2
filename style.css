@@ -245,7 +245,7 @@ button.secondary:hover {
 }
 #search-results {
   margin-top: 6px;
-  max-height: 200px;
+  max-height: 280px;
   overflow-y: auto;
 }
 .search-result {

@@ -708,6 +708,7 @@ let sitesAll = [];                  // [{id, source, name, lat, lng, radius_m, n
 let sitesLayers = {};               // source name -> L.layerGroup
 let visibleSources = new Set();     // source names currently checked
 let siteSearchQuery = '';
+let searchDealerLayer = null;
 
 const SHOP_LOCATIONS = [
   { label: 'Americus', color: '#8B5A2B' },
@@ -1086,15 +1087,86 @@ function updateImportSourceSelect() {
 }
 
 function siteSearchHay(site) {
-  return `${site.name || ''} ${site.notes || ''} ${site.source || ''}`.toLowerCase();
+  return `${site.name || ''} ${site.notes || ''} ${site.source || ''} ${site.lat || ''} ${site.lng || ''}`.toLowerCase();
+}
+
+function dealerSearchHay(d) {
+  return `${d.name || ''} ${d.address || ''} ${d.city || ''} ${d.state || ''} ${d.zip || ''} ${d.phone || ''} ${d.brand || ''}`.toLowerCase();
 }
 
 function matchingVisibleSites() {
   return sitesAll.filter((site) => {
-    if (!visibleSources.has(site.source)) return false;
-    if (!siteSearchQuery) return true;
-    return siteSearchHay(site).includes(siteSearchQuery);
+    if (siteSearchQuery) return siteSearchHay(site).includes(siteSearchQuery);
+    return visibleSources.has(site.source);
   });
+}
+
+function matchingDealers() {
+  if (!siteSearchQuery) return [];
+  return dealers.filter((d) => dealerSearchHay(d).includes(siteSearchQuery));
+}
+
+function matchingCounties() {
+  if (!siteSearchQuery) return [];
+  const out = [];
+  for (const fips in counties) {
+    const c = counties[fips];
+    const hay = `${c.name || ''} ${c.state || ''} county`.toLowerCase();
+    if (hay.includes(siteSearchQuery)) out.push({ fips, ...c });
+  }
+  return out;
+}
+
+function renderSearchDealers(matches) {
+  if (searchDealerLayer) {
+    map.removeLayer(searchDealerLayer);
+    searchDealerLayer = null;
+  }
+  if (!matches.length) return;
+  searchDealerLayer = L.markerClusterGroup({
+    maxClusterRadius: 50,
+    spiderfyOnMaxZoom: true,
+    showCoverageOnHover: false,
+  });
+  for (const d of matches) {
+    const marker = L.marker([d.lat, d.lng], {
+      icon: L.divIcon({
+        className: '',
+        html: `<span class="dealer-marker ${brandClass(d.brand)}" title="${escapeHtml(d.name)}"></span>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      }),
+    });
+    marker.dealerData = d;
+    marker.bindPopup(() => dealerPopupHtml(d));
+    searchDealerLayer.addLayer(marker);
+  }
+  map.addLayer(searchDealerLayer);
+}
+
+function openDealerMarker(dealer) {
+  const layers = [searchDealerLayer, dealerMarkers[dealer.brand]].filter(Boolean);
+  for (const layer of layers) {
+    const marker = layer.getLayers().find((m) => m.dealerData && m.dealerData.id === dealer.id);
+    if (!marker) continue;
+    if (typeof layer.zoomToShowLayer === 'function') {
+      layer.zoomToShowLayer(marker, () => marker.openPopup());
+    } else {
+      map.setView(marker.getLatLng(), 11);
+      marker.openPopup();
+    }
+    return;
+  }
+  map.setView([dealer.lat, dealer.lng], 11);
+}
+
+function zoomToCounty(fips) {
+  const c = counties[fips];
+  const f = countiesGeo && countiesGeo.features && countiesGeo.features.find((ft) => String(ft.id) === String(fips));
+  if (f) {
+    map.fitBounds(L.geoJSON(f).getBounds(), { maxZoom: 9, padding: [50, 50] });
+  }
+  if (c) showCountyInfo(c, fips);
 }
 
 function setOtherOverlaysVisible(on) {
@@ -1151,38 +1223,90 @@ function runMapSearch(opts = {}) {
   const filtering = q.length >= 2;
   siteSearchQuery = filtering ? q : '';
   const siteMatches = filtering ? matchingVisibleSites() : [];
+  const dealerMatches = filtering ? matchingDealers() : [];
+  const countyMatches = filtering ? matchingCounties() : [];
   if (!opts.skipRender) renderAllSites();
   setOtherOverlaysVisible(!filtering);
+  renderSearchDealers(dealerMatches);
 
   if (!filtering) {
     resultsBox.innerHTML = '';
     return;
   }
 
-  if (siteMatches.length && siteMatches.length <= 400) fitToSites(siteMatches);
+  const points = [
+    ...siteMatches.map((s) => [s.lat, s.lng]),
+    ...dealerMatches.map((d) => [d.lat, d.lng]),
+  ].filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+  if (points.length && points.length <= 400) {
+    if (points.length === 1) map.setView(points[0], 14);
+    else map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 13 });
+  }
 
-  const shown = siteMatches.slice(0, 40);
-  const extra = siteMatches.length - shown.length;
-  resultsBox.innerHTML =
-    (shown.length
-      ? shown
-          .map(
-            (s) => `<div class="search-result" data-type="site" data-id="${s.id}" data-source="${escapeHtml(s.source)}">
+  const siteShown = siteMatches.slice(0, 25);
+  const dealerShown = dealerMatches.slice(0, 15);
+  const countyShown = countyMatches.slice(0, 10);
+  const leftover =
+    siteMatches.length - siteShown.length + dealerMatches.length - dealerShown.length + countyMatches.length - countyShown.length;
+  const blocks = [];
+  if (siteShown.length) {
+    blocks.push(`<p class="hint">Sites</p>`);
+    blocks.push(
+      siteShown
+        .map(
+          (s) => `<div class="search-result" data-type="site" data-id="${s.id}">
           <span>${escapeHtml(s.name || `Site #${s.id}`)}</span>
           <span class="meta">${escapeHtml(s.source)}</span>
         </div>`,
-          )
-          .join('')
-      : `<p class="hint">No matching sites in the checked sources.</p>`) +
-    (extra > 0 ? `<p class="hint">${extra.toLocaleString()} more matches on the map.</p>` : '');
+        )
+        .join(''),
+    );
+  }
+  if (dealerShown.length) {
+    blocks.push(`<p class="hint">Dealers</p>`);
+    blocks.push(
+      dealerShown
+        .map(
+          (d) => `<div class="search-result" data-type="dealer" data-id="${d.id}">
+          <span>${escapeHtml(d.name)}</span>
+          <span class="meta">${escapeHtml([d.brand, d.city, d.state].filter(Boolean).join(' · '))}</span>
+        </div>`,
+        )
+        .join(''),
+    );
+  }
+  if (countyShown.length) {
+    blocks.push(`<p class="hint">Counties</p>`);
+    blocks.push(
+      countyShown
+        .map(
+          (c) => `<div class="search-result" data-type="county" data-fips="${escapeHtml(c.fips)}">
+          <span>${escapeHtml(c.name)} County</span>
+          <span class="meta">${escapeHtml(c.state)}</span>
+        </div>`,
+        )
+        .join(''),
+    );
+  }
+  if (!blocks.length) blocks.push(`<p class="hint">No matching sites, dealers, or counties.</p>`);
+  if (leftover > 0) blocks.push(`<p class="hint">${leftover.toLocaleString()} more matches on the map.</p>`);
+  resultsBox.innerHTML = blocks.join('');
 
-  resultsBox.querySelectorAll('.search-result[data-type="site"]').forEach((el) => {
+  resultsBox.querySelectorAll('.search-result').forEach((el) => {
     el.addEventListener('click', () => {
-      const id = Number(el.dataset.id);
-      const site = sitesAll.find((s) => s.id === id);
-      if (!site) return;
-      map.setView([site.lat, site.lng], 15);
-      setTimeout(() => openSiteMarker(site.id, site.source), 200);
+      if (el.dataset.type === 'site') {
+        const site = sitesAll.find((s) => s.id === Number(el.dataset.id));
+        if (!site) return;
+        map.setView([site.lat, site.lng], 15);
+        setTimeout(() => openSiteMarker(site.id, site.source), 200);
+      } else if (el.dataset.type === 'dealer') {
+        const dealer = dealers.find((d) => d.id === Number(el.dataset.id));
+        if (!dealer) return;
+        map.setView([dealer.lat, dealer.lng], 12);
+        setTimeout(() => openDealerMarker(dealer), 200);
+      } else if (el.dataset.type === 'county') {
+        zoomToCounty(el.dataset.fips);
+      }
     });
   });
 }
@@ -1218,9 +1342,9 @@ function renderAllSites() {
   }
 
   for (const src of sitesSources) {
-    if (visibleSources.has(src.name) && sitesLayers[src.name].getLayers().length) {
-      map.addLayer(sitesLayers[src.name]);
-    }
+    const layer = sitesLayers[src.name];
+    if (!layer || !layer.getLayers().length) continue;
+    if (siteSearchQuery || visibleSources.has(src.name)) map.addLayer(layer);
   }
 }
 
